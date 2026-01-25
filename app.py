@@ -89,7 +89,7 @@ if prompt := st.chat_input(f"Ask a question... (Using: {chat_model_name})"):
             response = supabase.rpc("match_documents", {
                 "query_embedding": vector,
                 "match_threshold": 0.3,
-                "match_count": 15
+                "match_count": 100
             }).execute()
         except Exception as e:
             st.error(f"Database Error: {e}")
@@ -130,4 +130,5 @@ if prompt := st.chat_input(f"Ask a question... (Using: {chat_model_name})"):
         st.session_state.messages.append({"role": "assistant", "content": answer})
 
         st.chat_message("assistant").write(answer)
+
 
