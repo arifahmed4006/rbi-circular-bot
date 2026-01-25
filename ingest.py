@@ -30,7 +30,7 @@ def run_scraper(days_back=1800):
     cutoff_date = datetime.date.today() - datetime.timedelta(days=days_back)
     
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False) 
+        browser = p.chromium.launch(headless=True) 
         
         # Main page (The List)
         page = browser.new_page()
@@ -134,4 +134,5 @@ def run_scraper(days_back=1800):
         browser.close()
 
 if __name__ == "__main__":
+
     run_scraper()
