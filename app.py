@@ -4,131 +4,150 @@ from supabase import create_client
 import os
 from dotenv import load_dotenv
 
-# 1. Load keys
+# 1. Configuration
 load_dotenv()
+st.set_page_config(page_title="RBI Smart Assistant", page_icon="🏦", layout="wide")
 
-# 2. Configure Gemini & Supabase
+# Custom CSS for a professional look
+st.markdown("""
+<style>
+    .stChatMessage { padding: 1rem; border-radius: 10px; margin-bottom: 1rem;}
+    .stChatMessage[data-testid="stChatMessage"] { background-color: #f0f2f6; }
+    h1 { color: #2c3e50; }
+</style>
+""", unsafe_allow_html=True)
+
+# 2. Sidebar Controls
+with st.sidebar:
+    st.title("🏦 RBI Assistant")
+    st.markdown("---")
+    st.markdown("**Status:** 🟢 Online")
+    st.markdown("**Data Source:** Official RBI Circulars")
+    
+    if st.button("🗑️ Clear Chat History", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
+    
+    st.markdown("---")
+    st.caption("Powered by Gemini Pro & Supabase")
+
+# 3. Setup AI & DB
 try:
     genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
     supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 except Exception as e:
-    st.error(f"Configuration Error: {e}")
+    st.error(f"⚠️ Configuration Error: {e}")
     st.stop()
 
-# 3. Setup Title
-st.set_page_config(page_title="RBI Smart Assistant")
-st.title("🏦 RBI Circular Assistant")
-
-# --- NEW: AUTO-DETECT MODEL FUNCTION ---
-@st.cache_resource # Run this once and remember it
+# 4. Auto-Detect Model (Smart Selector)
+@st.cache_resource
 def get_chat_model_name():
-    """Finds a working model name automatically."""
     try:
-        # Ask Google: "What models do I have?"
-        available_models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                available_models.append(m.name)
-        
-        # Priority list: Try to find these specific ones first
-        for preferred in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']:
-            if preferred in available_models:
-                return preferred
-        
-        # If none of the preferred ones exist, take the first valid one
-        if available_models:
-            return available_models[0]
-            
-        return "models/gemini-1.5-flash" # Absolute fallback
-    except Exception as e:
-        return "models/gemini-1.5-flash"
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        for preferred in ['models/gemini-1.5-flash', 'models/gemini-pro']:
+            if preferred in available_models: return preferred
+        return available_models[0] if available_models else "models/gemini-pro"
+    except:
+        return "models/gemini-pro"
 
-# Get the best model
 chat_model_name = get_chat_model_name()
-# ---------------------------------------
+
+# 5. Helper Functions
+def get_embedding(text):
+    try:
+        return genai.embed_content(model="models/text-embedding-004", content=text, task_type="retrieval_query")['embedding']
+    except:
+        return []
+
+# 6. Main Chat Interface
+st.title("🏦 RBI Circular Assistant")
+st.caption(f"Ask questions about RBI regulations (Model: {chat_model_name.split('/')[-1]})")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# Display History
 for msg in st.session_state.messages:
-    st.chat_message(msg["role"]).write(msg["content"])
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+        # If this message has sources attached (saved in history), show them
+        if "sources" in msg:
+            with st.expander("📚 View Sources"):
+                for source in msg["sources"]:
+                    st.markdown(f"- [{source['title']}]({source['url']}) ({source['date']})")
 
-def get_embedding(text):
-    try:
-        # Try the modern embedding model
-        return genai.embed_content(
-            model="models/text-embedding-004",
-            content=text,
-            task_type="retrieval_query"
-        )['embedding']
-    except:
-        # Fallback to older model if newer fails
-        try:
-            return genai.embed_content(
-                model="models/embedding-001",
-                content=text,
-                task_type="retrieval_query"
-            )['embedding']
-        except Exception as e:
-            st.error(f"Embedding failed. Check API Key. Error: {e}")
-            return []
-
-if prompt := st.chat_input(f"Ask a question... (Using: {chat_model_name})"):
+# Chat Input
+if prompt := st.chat_input("Ex: What are the new rules for housing loans?"):
     
+    # User Message
     st.session_state.messages.append({"role": "user", "content": prompt})
-    st.chat_message("user").write(prompt)
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-    with st.spinner("Analyzing circulars..."):
-        # A. Embed
-        vector = get_embedding(prompt)
-        if not vector:
-            st.stop()
-
-        # B. Search
-        try:
-            response = supabase.rpc("match_documents", {
-                "query_embedding": vector,
-                "match_threshold": 0.3,
-                "match_count": 100
-            }).execute()
-        except Exception as e:
-            st.error(f"Database Error: {e}")
-            st.stop()
-        
-        # C. Context
-        matches = response.data
-        context_text = ""
-        if matches:
-            for match in matches:
-                title = match.get('title', 'Unknown')
-                date = match.get('published_date', 'Unknown')
-                content = match.get('content', '')
-                context_text += f"\n---\nTitle: {title}\nDate: {date}\nExcerpt: {content}\n"
-        else:
-            context_text = "No specific circulars found."
-
-        # D. Generate Answer
-        try:
-            model = genai.GenerativeModel(chat_model_name)
+    # AI Processing
+    with st.chat_message("assistant"):
+        with st.spinner("🔍 Searching circulars..."):
             
-            full_prompt = f"""
-            You are an expert financial analyst. Answer the user's question based ONLY on the RBI circulars provided below.
+            # Search
+            vector = get_embedding(prompt)
+            context_text = ""
+            sources = [] # To store metadata for the UI
+
+            if vector:
+                try:
+                    # Increased match_count to 10 for better context
+                    response = supabase.rpc("match_documents", {
+                        "query_embedding": vector, "match_threshold": 0.4, "match_count": 10
+                    }).execute()
+                    
+                    matches = response.data
+                    seen_urls = set()
+                    
+                    if matches:
+                        for match in matches:
+                            title = match.get('title', 'Unknown')
+                            url = match.get('url', '#')
+                            date = match.get('published_date', 'Unknown')
+                            
+                            # Build Context text for AI
+                            context_text += f"\n---\nTitle: {title}\nDate: {date}\nExcerpt: {match.get('content', '')}\n"
+                            
+                            # Save Source for UI (avoid duplicates)
+                            if url not in seen_urls:
+                                sources.append({"title": title, "url": url, "date": date})
+                                seen_urls.add(url)
+                except Exception as e:
+                    st.error(f"DB Error: {e}")
+
+            if not context_text:
+                context_text = "No specific circulars found."
+
+            # Generate Answer
+            try:
+                model = genai.GenerativeModel(chat_model_name)
+                full_prompt = f"""
+                You are a helpful RBI financial assistant. Answer the question using ONLY the context below. 
+                If the answer is not in the context, say "I couldn't find specific details in the available circulars."
+                Format your answer with clear bullet points.
+
+                QUESTION: {prompt}
+                
+                CONTEXT:
+                {context_text}
+                """
+                ai_response = model.generate_content(full_prompt)
+                answer = ai_response.text
+            except Exception as e:
+                answer = "I'm having trouble connecting to the AI right now."
+
+            # Display Answer
+            st.markdown(answer)
             
-            USER QUESTION: {prompt}
+            # Display Sources immediately
+            if sources:
+                with st.expander("📚 View Sources Used"):
+                    for source in sources:
+                        st.markdown(f"- [{source['title']}]({source['url']}) ({source['date']})")
 
-            RBI CIRCULARS CONTEXT:
-            {context_text}
-            """
-            
-            ai_response = model.generate_content(full_prompt)
-            answer = ai_response.text
-            
-        except Exception as e:
-            st.error(f"Gemini Error ({chat_model_name}): {e}")
-            answer = "Sorry, I could not generate an answer."
-
-        st.session_state.messages.append({"role": "assistant", "content": answer})
-
-        st.chat_message("assistant").write(answer)
-
-
+            # Save to history
+            st.session_state.messages.append({"role": "assistant", "content": answer, "sources": sources})
