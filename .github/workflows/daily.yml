@@ -3,21 +3,34 @@ name: Daily RBI Scraper
 on:
   schedule:
     - cron: '30 3 * * *'  # Runs at 9:00 AM IST
-  workflow_dispatch:      # Adds a "Run Now" button
+  workflow_dispatch:      # Allows manual trigger
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-      - run: |
+
+      - name: Install dependencies
+        run: |
           pip install -r requirements.txt
           python -m playwright install chromium
-      - run: python ingest.py
+
+      - name: Run Scraper
+        run: python ingest.py
         env:
+          # Database & AI Keys
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          
+          # NEW: Email Credentials (The Missing Bridge)
+          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_RECIPIENTS: ${{ secrets.EMAIL_RECIPIENTS }}
