@@ -126,13 +126,10 @@ def run_scraper(days_back=1800):
                 except:
                     pass
 
-            count += 1
-            if count >= 5: 
-                print("--- Captured 5 circulars. Stopping test run. ---")
-                break
-        
+                    
         browser.close()
 
 if __name__ == "__main__":
 
     run_scraper()
+
