@@ -247,3 +247,74 @@ with col_main:
         st.info("👋 Welcome! Try asking about **KYC norms**, **Digital Lending**, or **Cyber Security**.")
 
     for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if "sources" in msg and msg["sources"]:
+                with st.expander("📚 Verified References"):
+                    for source in msg["sources"]:
+                        st.markdown(f"<div class='source-box'><a href='{source['url']}' target='_blank'>📄 {source['title']}</a><div class='source-date'>{source['date']}</div></div>", unsafe_allow_html=True)
+
+# --- CHAT INPUT ---
+if prompt := st.chat_input("Ask about KYC, Loans, Cyber Security..."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    st.rerun()
+
+# --- RESPONSE GENERATION ---
+if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+    
+    with col_main:
+        last_prompt = st.session_state.messages[-1]["content"]
+        
+        with st.chat_message("assistant"):
+            with st.spinner("🔍 Analyzing regulations..."):
+                
+                # 1. EMBED
+                try:
+                    vector = genai.embed_content(model="models/text-embedding-004", content=last_prompt, task_type="retrieval_query")['embedding']
+                except:
+                    vector = []
+
+                # 2. SEARCH
+                context_text = ""
+                sources = []
+                if vector:
+                    try:
+                        response = supabase.rpc("match_documents", {
+                            "query_embedding": vector, "match_threshold": 0.4, "match_count": 10
+                        }).execute()
+                        
+                        seen_urls = set()
+                        for match in response.data:
+                            title = match.get('title', 'Unknown')
+                            url = match.get('url', '#')
+                            date = match.get('published_date', 'Unknown')
+                            
+                            context_text += f"\nTitle: {title}\nDate: {date}\nExcerpt: {match.get('content', '')}\n"
+                            
+                            if url not in seen_urls:
+                                sources.append({"title": title, "url": url, "date": date})
+                                seen_urls.add(url)
+                    except Exception as e:
+                        st.error(f"DB Error: {e}")
+
+                if not context_text:
+                    context_text = "No specific circulars found."
+
+                # 3. GENERATE
+                try:
+                    model = genai.GenerativeModel(chat_model_name)
+                    full_prompt = f"""
+                    You are a senior banking regulatory consultant. 
+                    Answer the user's question using ONLY the provided RBI circulars.
+                    
+                    USER QUESTION: {last_prompt}
+                    CONTEXT: {context_text}
+                    """
+                    ai_response = model.generate_content(full_prompt)
+                    answer = ai_response.text
+                except Exception as e:
+                    answer = f"System Error: {str(e)}"
+
+                # Save & Display
+                st.session_state.messages.append({"role": "assistant", "content": answer, "sources": sources})
+                st.rerun()
