@@ -94,6 +94,23 @@ st.markdown("""
         border-top: 1px solid #e2e8f0;
         padding-top: 10px;
     }
+    
+    /* Flowchart Styling */
+    .flow-step {
+        background-color: #f1f5f9;
+        padding: 8px;
+        border-radius: 8px;
+        text-align: center;
+        margin-bottom: 5px;
+        font-size: 0.85rem;
+        border: 1px solid #e2e8f0;
+    }
+    .flow-arrow {
+        text-align: center;
+        color: #94a3b8;
+        font-size: 1.2rem;
+        margin: -5px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -131,39 +148,33 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # --- NEW: SYSTEM ARCHITECTURE WORKFLOW ---
-    with st.expander("⚙️ How it Works (Architecture)"):
+    # --- NEW: VISUAL FLOWCHART (No Technical Code) ---
+    with st.expander("⚙️ How it Works"):
         st.markdown("""
-        **1. Ingestion Engine:**
-        * **Source:** RBI Official Website
-        * **Tool:** GitHub Actions (Daily Scraper)
-        
-        **2. Memory & Processing:**
-        * **Chunking:** Recursive Character Splitter
-        * **Embeddings:** Google Gemini `text-embedding-004`
-        * **Vector DB:** Supabase (pgvector)
-        
-        **3. RAG Intelligence:**
-        * **Retrieval:** Similarity Search (Cosine)
-        * **Synthesis:** Google Gemini 1.5 Flash
-        """)
-        
-        # Mermaid Diagram
-        st.markdown("""
-        ```mermaid
-        graph TD;
-            A[RBI Website] -->|Daily Scrape| B(Raw Text);
-            B -->|Embedding| C{Gemini 004};
-            C -->|Vectors| D[(Supabase DB)];
-            U[User Query] -->|Search| D;
-            D -->|Context| E[Gemini LLM];
-            E -->|Answer| F[UI];
-        ```
-        """)
+        <div class="flow-step">
+            <b>1. RBI Website</b><br>
+            <span style="font-size:12px; color:#666;">Source of Truth</span>
+        </div>
+        <div class="flow-arrow">⬇️</div>
+        <div class="flow-step">
+            <b>2. AI Processor</b><br>
+            <span style="font-size:12px; color:#666;">Reads & Organizes Daily</span>
+        </div>
+        <div class="flow-arrow">⬇️</div>
+        <div class="flow-step">
+            <b>3. Secure Memory</b><br>
+            <span style="font-size:12px; color:#666;">Knowledge Database</span>
+        </div>
+        <div class="flow-arrow">⬇️</div>
+        <div class="flow-step">
+            <b>4. Smart Response</b><br>
+            <span style="font-size:12px; color:#666;">Generates Answer for You</span>
+        </div>
+        """, unsafe_allow_html=True)
 
     st.markdown("---")
     
-    # --- NEW: CREATOR CREDIT ---
+    # --- CREATOR CREDIT ---
     st.markdown(
         """
         <div class="footer-credit">
