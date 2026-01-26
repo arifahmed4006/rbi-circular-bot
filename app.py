@@ -13,7 +13,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- PROFESSIONAL CSS STYLING ---
+# --- PROFESSIONAL CSS STYLING (KEEPING NEW UI) ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
@@ -108,7 +108,7 @@ with st.sidebar:
         st.rerun()
     
     st.markdown("---")
-    st.caption("v2.6.0 • Auto-Healing Engine")
+    st.caption("v2.0 (Stable Revert)")
 
 # --- MAIN LAYOUT ---
 col_spacer1, col_main, col_spacer2 = st.columns([1, 10, 1])
@@ -140,32 +140,7 @@ if prompt := st.chat_input("Ask a question about RBI regulations..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.rerun()
 
-# --- HELPER: ROBUST MODEL SELECTOR ---
-def generate_robust_response(context, question):
-    """
-    Tries multiple models in order until one works.
-    This prevents 404/429 errors from crashing the app.
-    """
-    # 1. Try the newest Flash model (Best case)
-    # 2. Try the Pro model (Old Reliable - works on all versions)
-    model_list = ['gemini-1.5-flash', 'gemini-pro']
-    
-    last_error = ""
-    
-    for model_name in model_list:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(f"You are an RBI expert. Answer using ONLY this context:\n\n{context}\n\nQuestion: {question}")
-            return response.text
-        except Exception as e:
-            # If it fails, save the error and try the next model in the loop
-            last_error = str(e)
-            continue
-            
-    # If ALL models fail, return the error
-    return f"⚠️ System unavailable. Error details: {last_error}"
-
-# --- LOGIC HANDLER ---
+# --- LOGIC HANDLER (REVERTED TO YESTERDAY'S WORKING LOGIC) ---
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
     with col_main:
         last_prompt = st.session_state.messages[-1]["content"]
@@ -173,16 +148,12 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         with st.chat_message("assistant"):
             with st.spinner("🔍 Analyzing regulations..."):
                 
-                # 1. EMBEDDING (With Fallback)
-                vector = []
+                # 1. EMBEDDING
                 try:
+                    # Trying the standard embedding model that works for everyone
                     vector = genai.embed_content(model="models/text-embedding-004", content=last_prompt, task_type="retrieval_query")['embedding']
                 except:
-                    # Retry with older embedding model if 004 fails
-                    try:
-                        vector = genai.embed_content(model="models/embedding-001", content=last_prompt, task_type="retrieval_query")['embedding']
-                    except:
-                        vector = []
+                    vector = []
                 
                 # 2. SEARCH
                 context_text = ""
@@ -205,13 +176,19 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                                 sources.append({"title": title, "url": url, "date": date})
                                 seen_urls.add(url)
                     except Exception as e:
-                        st.error(f"Database Search Error: {e}")
+                        st.error(f"Search Error: {e}")
                 
                 if not context_text: 
                     context_text = "No specific circulars found."
 
-                # 3. GENERATION (Using the Helper Function)
-                ai_response = generate_robust_response(context_text, last_prompt)
+                # 3. GENERATION
+                try:
+                    # REVERT: Using the simple model name that worked yesterday.
+                    # We are intentionally NOT using 'flash' or specific versions here to match yesterday's state.
+                    model = genai.GenerativeModel('gemini-pro')
+                    ai_response = model.generate_content(f"You are an RBI expert. Answer using ONLY this context:\n\n{context_text}\n\nQuestion: {last_prompt}").text
+                except Exception as e:
+                    ai_response = f"⚠️ Error: {str(e)}"
 
                 # Save Response
                 st.session_state.messages.append({"role": "assistant", "content": ai_response, "sources": sources})
