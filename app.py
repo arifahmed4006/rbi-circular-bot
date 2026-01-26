@@ -96,20 +96,40 @@ st.markdown("""
     }
     
     /* Flowchart Styling */
-    .flow-step {
-        background-color: #f1f5f9;
-        padding: 8px;
-        border-radius: 8px;
-        text-align: center;
+    .flow-header {
+        font-size: 0.75rem;
+        font-weight: 700;
+        color: #64748b;
+        text-transform: uppercase;
+        margin-top: 10px;
         margin-bottom: 5px;
-        font-size: 0.85rem;
+        letter-spacing: 0.05em;
+    }
+    .flow-step {
+        background-color: #ffffff;
+        padding: 8px 10px;
+        border-radius: 6px;
+        font-size: 0.8rem;
         border: 1px solid #e2e8f0;
+        margin-bottom: 4px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .tech-badge {
+        font-size: 0.7rem;
+        background-color: #f1f5f9;
+        padding: 2px 6px;
+        border-radius: 4px;
+        color: #475569;
+        font-weight: 600;
     }
     .flow-arrow {
         text-align: center;
-        color: #94a3b8;
-        font-size: 1.2rem;
-        margin: -5px 0;
+        color: #cbd5e1;
+        font-size: 0.8rem;
+        line-height: 1;
+        margin: 2px 0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -148,27 +168,51 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # --- NEW: VISUAL FLOWCHART (No Technical Code) ---
-    with st.expander("⚙️ How it Works"):
+    # --- NEW: SYSTEM ARCHITECTURE (COMPLEXITY SHOWCASE) ---
+    with st.expander("⚙️ System Architecture", expanded=False):
+        
+        # 1. Ingestion Pipeline
+        st.markdown('<div class="flow-header">DATA INGESTION PIPELINE</div>', unsafe_allow_html=True)
         st.markdown("""
         <div class="flow-step">
-            <b>1. RBI Website</b><br>
-            <span style="font-size:12px; color:#666;">Source of Truth</span>
+            <span>🌐 <b>Browser Mimic</b></span>
+            <span class="tech-badge">Playwright</span>
         </div>
-        <div class="flow-arrow">⬇️</div>
+        <div class="flow-arrow">⬇</div>
         <div class="flow-step">
-            <b>2. AI Processor</b><br>
-            <span style="font-size:12px; color:#666;">Reads & Organizes Daily</span>
+            <span>📄 <b>Smart Chunking</b></span>
+            <span class="tech-badge">Python</span>
         </div>
-        <div class="flow-arrow">⬇️</div>
+        <div class="flow-arrow">⬇</div>
         <div class="flow-step">
-            <b>3. Secure Memory</b><br>
-            <span style="font-size:12px; color:#666;">Knowledge Database</span>
+            <span>🔢 <b>Vector Embedding</b></span>
+            <span class="tech-badge">Gemini 004</span>
         </div>
-        <div class="flow-arrow">⬇️</div>
+        <div class="flow-arrow">⬇</div>
         <div class="flow-step">
-            <b>4. Smart Response</b><br>
-            <span style="font-size:12px; color:#666;">Generates Answer for You</span>
+            <span>💾 <b>Vector Storage</b></span>
+            <span class="tech-badge">Supabase</span>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("")
+        
+        # 2. Retrieval Pipeline
+        st.markdown('<div class="flow-header">RAG INFERENCE PIPELINE</div>', unsafe_allow_html=True)
+        st.markdown("""
+        <div class="flow-step">
+            <span>🔍 <b>Semantic Search</b></span>
+            <span class="tech-badge">Cosine Sim</span>
+        </div>
+        <div class="flow-arrow">⬇</div>
+        <div class="flow-step">
+            <span>🧩 <b>Context Ranking</b></span>
+            <span class="tech-badge">RAG Algorithm</span>
+        </div>
+        <div class="flow-arrow">⬇</div>
+        <div class="flow-step">
+            <span>🤖 <b>Synthesis</b></span>
+            <span class="tech-badge">Gemini 1.5</span>
         </div>
         """, unsafe_allow_html=True)
 
@@ -178,7 +222,7 @@ with st.sidebar:
     st.markdown(
         """
         <div class="footer-credit">
-            <b>v2.2.0</b> • Engine: <code>""" + chat_model_name.split('/')[-1] + """</code><br>
+            <b>v2.3.0</b> • Engine: <code>""" + chat_model_name.split('/')[-1] + """</code><br>
             Created by <b>Shaik Arif Ahmed</b>
         </div>
         """, 
@@ -203,74 +247,3 @@ with col_main:
         st.info("👋 Welcome! Try asking about **KYC norms**, **Digital Lending**, or **Cyber Security**.")
 
     for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            if "sources" in msg and msg["sources"]:
-                with st.expander("📚 Verified References"):
-                    for source in msg["sources"]:
-                        st.markdown(f"<div class='source-box'><a href='{source['url']}' target='_blank'>📄 {source['title']}</a><div class='source-date'>{source['date']}</div></div>", unsafe_allow_html=True)
-
-# --- CHAT INPUT ---
-if prompt := st.chat_input("Ask about KYC, Loans, Cyber Security..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    st.rerun()
-
-# --- RESPONSE GENERATION ---
-if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
-    
-    with col_main:
-        last_prompt = st.session_state.messages[-1]["content"]
-        
-        with st.chat_message("assistant"):
-            with st.spinner("🔍 Analyzing regulations..."):
-                
-                # 1. EMBED
-                try:
-                    vector = genai.embed_content(model="models/text-embedding-004", content=last_prompt, task_type="retrieval_query")['embedding']
-                except:
-                    vector = []
-
-                # 2. SEARCH
-                context_text = ""
-                sources = []
-                if vector:
-                    try:
-                        response = supabase.rpc("match_documents", {
-                            "query_embedding": vector, "match_threshold": 0.4, "match_count": 10
-                        }).execute()
-                        
-                        seen_urls = set()
-                        for match in response.data:
-                            title = match.get('title', 'Unknown')
-                            url = match.get('url', '#')
-                            date = match.get('published_date', 'Unknown')
-                            
-                            context_text += f"\nTitle: {title}\nDate: {date}\nExcerpt: {match.get('content', '')}\n"
-                            
-                            if url not in seen_urls:
-                                sources.append({"title": title, "url": url, "date": date})
-                                seen_urls.add(url)
-                    except Exception as e:
-                        st.error(f"DB Error: {e}")
-
-                if not context_text:
-                    context_text = "No specific circulars found."
-
-                # 3. GENERATE
-                try:
-                    model = genai.GenerativeModel(chat_model_name)
-                    full_prompt = f"""
-                    You are a senior banking regulatory consultant. 
-                    Answer the user's question using ONLY the provided RBI circulars.
-                    
-                    USER QUESTION: {last_prompt}
-                    CONTEXT: {context_text}
-                    """
-                    ai_response = model.generate_content(full_prompt)
-                    answer = ai_response.text
-                except Exception as e:
-                    answer = f"System Error: {str(e)}"
-
-                # Save & Display
-                st.session_state.messages.append({"role": "assistant", "content": answer, "sources": sources})
-                st.rerun()
