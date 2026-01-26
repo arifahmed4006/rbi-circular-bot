@@ -96,21 +96,6 @@ except Exception as e:
     st.error(f"⚠️ System Error: {e}")
     st.stop()
 
-@st.cache_resource
-def get_chat_model_name():
-    # Priority list of models to try
-    models_to_try = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']
-    try:
-        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        for m in models_to_try:
-            if m in available:
-                return m
-        return "models/gemini-pro"
-    except:
-        return "models/gemini-pro"
-
-chat_model_name = get_chat_model_name()
-
 # --- SIDEBAR ---
 with st.sidebar:
     st.markdown("### 🎛️ Control Center")
@@ -123,7 +108,7 @@ with st.sidebar:
         st.rerun()
     
     st.markdown("---")
-    st.caption(f"v2.1.0 • {chat_model_name.split('/')[-1]}")
+    st.caption("v2.2.0 • Gemini 1.5 Flash")
 
 # --- MAIN LAYOUT ---
 col_spacer1, col_main, col_spacer2 = st.columns([1, 10, 1])
@@ -184,7 +169,6 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                             
                             context_text += f"\nTitle: {title}\nDate: {date}\nExcerpt: {match.get('content', '')}\n"
                             
-                            # Deduplicate sources
                             if url not in [s['url'] for s in sources]:
                                 sources.append({"title": title, "url": url, "date": date})
                     except Exception as e:
@@ -192,17 +176,18 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                 
                 if not context_text: context_text = "No specific circulars found."
 
-                # Generate
+                # Generate (FIXED MODEL NAME)
                 try:
-                    model = genai.GenerativeModel(chat_model_name)
+                    # Primary: Gemini 1.5 Flash (Fast & Free)
+                    model = genai.GenerativeModel('gemini-1.5-flash')
                     ai_response = model.generate_content(f"You are an RBI expert. Answer using ONLY this context:\n\n{context_text}\n\nQuestion: {last_prompt}").text
                 except Exception as e:
-                    # Fallback Logic: Try older model if new one fails
+                    # Fallback: Gemini 1.5 Pro (Smarter, but strictly 1.5)
                     try:
-                        fallback_model = genai.GenerativeModel('models/gemini-pro')
+                        fallback_model = genai.GenerativeModel('gemini-1.5-pro')
                         ai_response = fallback_model.generate_content(f"You are an RBI expert. Answer using ONLY this context:\n\n{context_text}\n\nQuestion: {last_prompt}").text
                     except Exception as e2:
-                        ai_response = f"⚠️ AI Error: {e}. Fallback also failed: {e2}"
+                        ai_response = f"⚠️ AI Error. Please check your API Key limits. Error details: {e}"
 
                 # Save Response
                 st.session_state.messages.append({"role": "assistant", "content": ai_response, "sources": sources})
