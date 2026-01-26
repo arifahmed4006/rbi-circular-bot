@@ -3,6 +3,7 @@ import google.generativeai as genai
 from supabase import create_client
 import os
 from dotenv import load_dotenv
+import time
 
 # 1. Configuration & Secrets
 load_dotenv()
@@ -96,56 +97,11 @@ except Exception as e:
     st.error(f"⚠️ System Error: {e}")
     st.stop()
 
-# --- BULLETPROOF MODEL SELECTOR ---
-@st.cache_resource
-def get_valid_model_name():
-    """
-    Dynamically lists models available to the API key and picks the best one.
-    This prevents '404 Model Not Found' errors.
-    """
-    try:
-        # Get list of all models valid for this API key
-        models = list(genai.list_models())
-        
-        # Filter for models that support text generation ('generateContent')
-        chat_models = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
-        
-        if not chat_models:
-            return None
-
-        # Priority Selection: Try to find the best model in this order
-        # 1. Flash (Fastest/Cheapest)
-        for m in chat_models:
-            if 'flash' in m and '1.5' in m: return m
-        
-        # 2. Pro 1.5 (Smarter)
-        for m in chat_models:
-            if 'pro' in m and '1.5' in m: return m
-            
-        # 3. Pro 1.0 (Standard)
-        for m in chat_models:
-            if 'gemini-pro' in m: return m
-
-        # 4. Fallback: Just take the first valid one found
-        return chat_models[0]
-        
-    except Exception as e:
-        # If listing fails, return a safe default and hope for the best
-        return "models/gemini-pro"
-
-# Get the valid model name once
-active_model_name = get_valid_model_name()
-
 # --- SIDEBAR ---
 with st.sidebar:
     st.markdown("### 🎛️ Control Center")
     st.markdown("**SYSTEM STATUS**")
-    
-    if active_model_name:
-        st.markdown(f'<div style="background:#f0fdf4;color:#15803d;padding:4px 12px;border-radius:20px;text-align:center;font-weight:600;font-size:0.85rem;border:1px solid #bbf7d0;">🟢 Online</div>', unsafe_allow_html=True)
-    else:
-        st.markdown(f'<div style="background:#fef2f2;color:#991b1b;padding:4px 12px;border-radius:20px;text-align:center;font-weight:600;font-size:0.85rem;border:1px solid #fecaca;">🔴 Error</div>', unsafe_allow_html=True)
-
+    st.markdown('<div style="background:#f0fdf4;color:#15803d;padding:4px 12px;border-radius:20px;text-align:center;font-weight:600;font-size:0.85rem;border:1px solid #bbf7d0;">🟢 Online</div>', unsafe_allow_html=True)
     st.markdown("**DATA SCOPE**\n\n📚 **RBI Circulars**\n(2025 – Present)")
     
     if st.button("🗑️ Clear Chat", use_container_width=True):
@@ -153,9 +109,7 @@ with st.sidebar:
         st.rerun()
     
     st.markdown("---")
-    # Show the user exactly which model we found (Debugging)
-    display_name = active_model_name.replace("models/", "") if active_model_name else "No Model Found"
-    st.caption(f"v2.3.0 • {display_name}")
+    st.caption("v2.4.0 • Gemini 1.5 Flash (Stable)")
 
 # --- MAIN LAYOUT ---
 col_spacer1, col_main, col_spacer2 = st.columns([1, 10, 1])
@@ -167,11 +121,6 @@ with col_main:
         <div class="hero-subtitle">Semantic search & conversational intelligence over RBI circulars</div>
     </div>
     """, unsafe_allow_html=True)
-
-    # Critical Error Check
-    if not active_model_name:
-        st.error("❌ API Error: No Gemini models found for your API Key. Please check if 'Generative Language API' is enabled in your Google Cloud Console.")
-        st.stop()
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -199,11 +148,11 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         
         with st.chat_message("assistant"):
             with st.spinner("🔍 Analyzing regulations..."):
-                # Embed
+                # Embed - Using the stable embedding model
                 try:
                     vector = genai.embed_content(model="models/text-embedding-004", content=last_prompt, task_type="retrieval_query")['embedding']
                 except Exception as e:
-                    # Fallback embedding model
+                    # Fallback embedding
                     try:
                         vector = genai.embed_content(model="models/embedding-001", content=last_prompt, task_type="retrieval_query")['embedding']
                     except:
@@ -225,6 +174,7 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                             
                             context_text += f"\nTitle: {title}\nDate: {date}\nExcerpt: {match.get('content', '')}\n"
                             
+                            # Deduplicate sources
                             if url not in [s['url'] for s in sources]:
                                 sources.append({"title": title, "url": url, "date": date})
                     except Exception as e:
@@ -232,13 +182,10 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                 
                 if not context_text: context_text = "No specific circulars found."
 
-                # Generate (USING AUTO-DETECTED MODEL)
+                # Generate (HARDCODED STABLE MODEL)
                 try:
-                    model = genai.GenerativeModel(active_model_name)
+                    # We strictly use gemini-1.5-flash. It is Fast, Free, and Reliable.
+                    model = genai.GenerativeModel('gemini-1.5-flash')
                     ai_response = model.generate_content(f"You are an RBI expert. Answer using ONLY this context:\n\n{context_text}\n\nQuestion: {last_prompt}").text
                 except Exception as e:
-                    ai_response = f"⚠️ AI Error: {e}"
-
-                # Save Response
-                st.session_state.messages.append({"role": "assistant", "content": ai_response, "sources": sources})
-                st.rerun()
+                     # If Flash fails (
