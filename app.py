@@ -3,7 +3,6 @@ import google.generativeai as genai
 from supabase import create_client
 import os
 from dotenv import load_dotenv
-import time
 
 # 1. Configuration & Secrets
 load_dotenv()
@@ -109,7 +108,7 @@ with st.sidebar:
         st.rerun()
     
     st.markdown("---")
-    st.caption("v2.4.0 • Gemini 1.5 Flash (Stable)")
+    st.caption("v2.5.0 • Gemini 1.5 Flash")
 
 # --- MAIN LAYOUT ---
 col_spacer1, col_main, col_spacer2 = st.columns([1, 10, 1])
@@ -148,18 +147,15 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         
         with st.chat_message("assistant"):
             with st.spinner("🔍 Analyzing regulations..."):
-                # Embed - Using the stable embedding model
+                
+                # 1. EMBEDDING
+                vector = []
                 try:
                     vector = genai.embed_content(model="models/text-embedding-004", content=last_prompt, task_type="retrieval_query")['embedding']
                 except Exception as e:
-                    # Fallback embedding
-                    try:
-                        vector = genai.embed_content(model="models/embedding-001", content=last_prompt, task_type="retrieval_query")['embedding']
-                    except:
-                        st.error(f"Embedding failed: {e}")
-                        vector = []
+                    st.error(f"Embedding Error: {e}")
                 
-                # Search
+                # 2. SEARCH
                 context_text = ""
                 sources = []
                 if vector:
@@ -167,6 +163,8 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                         response = supabase.rpc("match_documents", {
                             "query_embedding": vector, "match_threshold": 0.4, "match_count": 10
                         }).execute()
+                        
+                        seen_urls = set()
                         for match in response.data:
                             title = match.get('title', 'Unknown')
                             url = match.get('url', '#')
@@ -174,18 +172,25 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                             
                             context_text += f"\nTitle: {title}\nDate: {date}\nExcerpt: {match.get('content', '')}\n"
                             
-                            # Deduplicate sources
-                            if url not in [s['url'] for s in sources]:
+                            if url not in seen_urls:
                                 sources.append({"title": title, "url": url, "date": date})
+                                seen_urls.add(url)
                     except Exception as e:
-                        st.error(f"Search failed: {e}")
+                        st.error(f"Database Search Error: {e}")
                 
-                if not context_text: context_text = "No specific circulars found."
+                if not context_text: 
+                    context_text = "No specific circulars found."
 
-                # Generate (HARDCODED STABLE MODEL)
+                # 3. GENERATION
+                ai_response = "I encountered an error generating the response."
                 try:
-                    # We strictly use gemini-1.5-flash. It is Fast, Free, and Reliable.
+                    # We strictly use 'gemini-1.5-flash' as it is the most reliable model for your API key tier.
                     model = genai.GenerativeModel('gemini-1.5-flash')
-                    ai_response = model.generate_content(f"You are an RBI expert. Answer using ONLY this context:\n\n{context_text}\n\nQuestion: {last_prompt}").text
+                    response = model.generate_content(f"You are an RBI expert. Answer using ONLY this context:\n\n{context_text}\n\nQuestion: {last_prompt}")
+                    ai_response = response.text
                 except Exception as e:
-                     # If Flash fails (
+                    ai_response = f"⚠️ AI Error: {str(e)}"
+
+                # Save Response
+                st.session_state.messages.append({"role": "assistant", "content": ai_response, "sources": sources})
+                st.rerun()
