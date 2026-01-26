@@ -98,9 +98,14 @@ except Exception as e:
 
 @st.cache_resource
 def get_chat_model_name():
+    # Priority list of models to try
+    models_to_try = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']
     try:
-        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        return next((m for m in ['models/gemini-1.5-flash', 'models/gemini-pro'] if m in models), "models/gemini-pro")
+        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        for m in models_to_try:
+            if m in available:
+                return m
+        return "models/gemini-pro"
     except:
         return "models/gemini-pro"
 
@@ -121,7 +126,6 @@ with st.sidebar:
     st.caption(f"v2.1.0 • {chat_model_name.split('/')[-1]}")
 
 # --- MAIN LAYOUT ---
-# 1. The Header (Centered)
 col_spacer1, col_main, col_spacer2 = st.columns([1, 10, 1])
 
 with col_main:
@@ -132,7 +136,6 @@ with col_main:
     </div>
     """, unsafe_allow_html=True)
 
-    # 2. Chat History (Centered)
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
@@ -147,20 +150,13 @@ with col_main:
                     for source in msg["sources"]:
                         st.markdown(f"<div class='source-box'><a href='{source['url']}' target='_blank'>📄 {source['title']}</a><div class='source-date'>{source['date']}</div></div>", unsafe_allow_html=True)
 
-# --- CHAT INPUT (THE FIX) ---
-# IMPORTANT: This is now OUTSIDE the columns. 
-# It sits at the root level, which forces it to be sticky at the bottom.
+# --- CHAT INPUT ---
 if prompt := st.chat_input("Ask a question about RBI regulations..."):
-    
     st.session_state.messages.append({"role": "user", "content": prompt})
-    # We must rerun to render the user message inside the column structure above
     st.rerun()
 
 # --- LOGIC HANDLER ---
-# This runs after the rerun to generate the response
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
-    
-    # We need to re-enter the column context just for the "Thinking" spinner
     with col_main:
         last_prompt = st.session_state.messages[-1]["content"]
         
@@ -169,7 +165,8 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                 # Embed
                 try:
                     vector = genai.embed_content(model="models/text-embedding-004", content=last_prompt, task_type="retrieval_query")['embedding']
-                except:
+                except Exception as e:
+                    st.error(f"Embedding failed: {e}")
                     vector = []
                 
                 # Search
@@ -184,11 +181,14 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                             title = match.get('title', 'Unknown')
                             url = match.get('url', '#')
                             date = match.get('published_date', 'Unknown')
+                            
                             context_text += f"\nTitle: {title}\nDate: {date}\nExcerpt: {match.get('content', '')}\n"
+                            
+                            # Deduplicate sources
                             if url not in [s['url'] for s in sources]:
                                 sources.append({"title": title, "url": url, "date": date})
-                    except:
-                        pass
+                    except Exception as e:
+                        st.error(f"Search failed: {e}")
                 
                 if not context_text: context_text = "No specific circulars found."
 
@@ -196,9 +196,14 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                 try:
                     model = genai.GenerativeModel(chat_model_name)
                     ai_response = model.generate_content(f"You are an RBI expert. Answer using ONLY this context:\n\n{context_text}\n\nQuestion: {last_prompt}").text
-                except:
-                    ai_response = "System is busy. Please try again."
+                except Exception as e:
+                    # Fallback Logic: Try older model if new one fails
+                    try:
+                        fallback_model = genai.GenerativeModel('models/gemini-pro')
+                        ai_response = fallback_model.generate_content(f"You are an RBI expert. Answer using ONLY this context:\n\n{context_text}\n\nQuestion: {last_prompt}").text
+                    except Exception as e2:
+                        ai_response = f"⚠️ AI Error: {e}. Fallback also failed: {e2}"
 
                 # Save Response
                 st.session_state.messages.append({"role": "assistant", "content": ai_response, "sources": sources})
-                st.rerun() # Rerun one last time to show the AI response
+                st.rerun()
