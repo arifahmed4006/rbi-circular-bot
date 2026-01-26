@@ -85,6 +85,15 @@ st.markdown("""
         font-size: 0.8rem;
         margin-top: 4px;
     }
+    
+    /* Footer Credit */
+    .footer-credit {
+        margin-top: 20px;
+        font-size: 0.85rem;
+        color: #64748b;
+        border-top: 1px solid #e2e8f0;
+        padding-top: 10px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -96,7 +105,7 @@ except Exception as e:
     st.error(f"⚠️ System Error: {e}")
     st.stop()
 
-# 3. Model Selector (YOUR TRUSTED LOGIC)
+# 3. Model Selector (Trusted Logic)
 @st.cache_resource
 def get_chat_model_name():
     try:
@@ -109,7 +118,7 @@ def get_chat_model_name():
 
 chat_model_name = get_chat_model_name()
 
-# --- SIDEBAR ---
+# --- SIDEBAR (UPDATED) ---
 with st.sidebar:
     st.markdown("### 🎛️ Control Center")
     st.markdown("**SYSTEM STATUS**")
@@ -121,10 +130,51 @@ with st.sidebar:
         st.rerun()
     
     st.markdown("---")
-    st.caption(f"**Version:** 2.1.0\n**Engine:** `{chat_model_name.split('/')[-1]}`")
+    
+    # --- NEW: SYSTEM ARCHITECTURE WORKFLOW ---
+    with st.expander("⚙️ How it Works (Architecture)"):
+        st.markdown("""
+        **1. Ingestion Engine:**
+        * **Source:** RBI Official Website
+        * **Tool:** GitHub Actions (Daily Scraper)
+        
+        **2. Memory & Processing:**
+        * **Chunking:** Recursive Character Splitter
+        * **Embeddings:** Google Gemini `text-embedding-004`
+        * **Vector DB:** Supabase (pgvector)
+        
+        **3. RAG Intelligence:**
+        * **Retrieval:** Similarity Search (Cosine)
+        * **Synthesis:** Google Gemini 1.5 Flash
+        """)
+        
+        # Mermaid Diagram
+        st.markdown("""
+        ```mermaid
+        graph TD;
+            A[RBI Website] -->|Daily Scrape| B(Raw Text);
+            B -->|Embedding| C{Gemini 004};
+            C -->|Vectors| D[(Supabase DB)];
+            U[User Query] -->|Search| D;
+            D -->|Context| E[Gemini LLM];
+            E -->|Answer| F[UI];
+        ```
+        """)
+
+    st.markdown("---")
+    
+    # --- NEW: CREATOR CREDIT ---
+    st.markdown(
+        """
+        <div class="footer-credit">
+            <b>v2.2.0</b> • Engine: <code>""" + chat_model_name.split('/')[-1] + """</code><br>
+            Created by <b>Shaik Arif Ahmed</b>
+        </div>
+        """, 
+        unsafe_allow_html=True
+    )
 
 # --- MAIN LAYOUT ---
-# We define the columns here for the header and history
 col_spacer1, col_main, col_spacer2 = st.columns([1, 10, 1])
 
 with col_main:
@@ -149,18 +199,14 @@ with col_main:
                     for source in msg["sources"]:
                         st.markdown(f"<div class='source-box'><a href='{source['url']}' target='_blank'>📄 {source['title']}</a><div class='source-date'>{source['date']}</div></div>", unsafe_allow_html=True)
 
-# --- CHAT INPUT (CRITICAL FIX) ---
-# IMPORTANT: This is now OUTSIDE the columns and logic blocks.
-# This forces it to stick to the bottom of the screen.
+# --- CHAT INPUT ---
 if prompt := st.chat_input("Ask about KYC, Loans, Cyber Security..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.rerun()
 
 # --- RESPONSE GENERATION ---
-# This block runs automatically after the user hits enter and the app reruns.
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
     
-    # We re-enter the column to keep the spinner centered
     with col_main:
         last_prompt = st.session_state.messages[-1]["content"]
         
@@ -199,7 +245,7 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                 if not context_text:
                     context_text = "No specific circulars found."
 
-                # 3. GENERATE (Using your trusted logic)
+                # 3. GENERATE
                 try:
                     model = genai.GenerativeModel(chat_model_name)
                     full_prompt = f"""
