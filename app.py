@@ -276,14 +276,14 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                     st.error(f"⚠️ Embedding Error: {e}")
                     vector = []
 
-                # 2. SEARCH (CRITICAL FIX: LOWER THRESHOLD)
+                # 2. SEARCH
                 context_text = ""
                 sources = []
-                debug_info = [] # Store raw results for debugging
+                debug_info = [] # Store raw results
                 
                 if vector:
                     try:
-                        # Changed threshold from 0.4 to 0.1 to be more lenient
+                        # Low threshold to ensure we catch everything
                         response = supabase.rpc("match_documents", {
                             "query_embedding": vector, "match_threshold": 0.1, "match_count": 10
                         }).execute()
@@ -295,15 +295,12 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                             date = match.get('published_date', 'Unknown')
                             similarity = match.get('similarity', 0)
                             
-                            # Add to Context
                             context_text += f"\nTitle: {title}\nDate: {date}\nExcerpt: {match.get('content', '')}\n"
                             
-                            # Add to Sources
                             if url not in seen_urls:
                                 sources.append({"title": title, "url": url, "date": date})
                                 seen_urls.add(url)
                             
-                            # Add to Debug Log
                             debug_info.append(f"{similarity:.4f} | {title}")
                             
                     except Exception as e:
@@ -330,9 +327,9 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                 # Save & Display
                 st.session_state.messages.append({"role": "assistant", "content": answer, "sources": sources})
                 
-                # Show Debug info purely for you (the admin) to verify
+                # Optional Debug
                 if debug_info:
-                    with st.expander("🛠️ Debug: Raw DB Matches (Similarity Score | Title)"):
+                    with st.expander("🛠️ Debug Information"):
                         st.write(debug_info)
                 
                 st.rerun()
