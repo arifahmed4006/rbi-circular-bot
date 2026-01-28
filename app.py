@@ -268,22 +268,24 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         with st.chat_message("assistant"):
             with st.spinner("🔍 Analyzing regulations..."):
                 
-                # 1. EMBED (Debug Mode Enabled)
+                # 1. EMBED
                 vector = []
                 try:
                     vector = genai.embed_content(model="models/text-embedding-004", content=last_prompt, task_type="retrieval_query")['embedding']
                 except Exception as e:
-                    # DEBUG: This will show you exactly why it failed!
                     st.error(f"⚠️ Embedding Error: {e}")
                     vector = []
 
-                # 2. SEARCH
+                # 2. SEARCH (CRITICAL FIX: LOWER THRESHOLD)
                 context_text = ""
                 sources = []
+                debug_info = [] # Store raw results for debugging
+                
                 if vector:
                     try:
+                        # Changed threshold from 0.4 to 0.1 to be more lenient
                         response = supabase.rpc("match_documents", {
-                            "query_embedding": vector, "match_threshold": 0.4, "match_count": 10
+                            "query_embedding": vector, "match_threshold": 0.1, "match_count": 10
                         }).execute()
                         
                         seen_urls = set()
@@ -291,14 +293,20 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                             title = match.get('title', 'Unknown')
                             url = match.get('url', '#')
                             date = match.get('published_date', 'Unknown')
+                            similarity = match.get('similarity', 0)
                             
+                            # Add to Context
                             context_text += f"\nTitle: {title}\nDate: {date}\nExcerpt: {match.get('content', '')}\n"
                             
+                            # Add to Sources
                             if url not in seen_urls:
                                 sources.append({"title": title, "url": url, "date": date})
                                 seen_urls.add(url)
+                            
+                            # Add to Debug Log
+                            debug_info.append(f"{similarity:.4f} | {title}")
+                            
                     except Exception as e:
-                        # DEBUG: This will show if Supabase is disconnected/paused
                         st.error(f"⚠️ Database Error: {e}")
 
                 if not context_text:
@@ -321,4 +329,10 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
 
                 # Save & Display
                 st.session_state.messages.append({"role": "assistant", "content": answer, "sources": sources})
+                
+                # Show Debug info purely for you (the admin) to verify
+                if debug_info:
+                    with st.expander("🛠️ Debug: Raw DB Matches (Similarity Score | Title)"):
+                        st.write(debug_info)
+                
                 st.rerun()
