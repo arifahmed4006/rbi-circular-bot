@@ -168,7 +168,7 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # --- NEW: SYSTEM ARCHITECTURE (COMPLEXITY SHOWCASE) ---
+    # --- NEW: SYSTEM ARCHITECTURE ---
     with st.expander("⚙️ System Architecture", expanded=False):
         
         # 1. Ingestion Pipeline
@@ -268,10 +268,13 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         with st.chat_message("assistant"):
             with st.spinner("🔍 Analyzing regulations..."):
                 
-                # 1. EMBED
+                # 1. EMBED (Debug Mode Enabled)
+                vector = []
                 try:
                     vector = genai.embed_content(model="models/text-embedding-004", content=last_prompt, task_type="retrieval_query")['embedding']
-                except:
+                except Exception as e:
+                    # DEBUG: This will show you exactly why it failed!
+                    st.error(f"⚠️ Embedding Error: {e}")
                     vector = []
 
                 # 2. SEARCH
@@ -295,7 +298,8 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                                 sources.append({"title": title, "url": url, "date": date})
                                 seen_urls.add(url)
                     except Exception as e:
-                        st.error(f"DB Error: {e}")
+                        # DEBUG: This will show if Supabase is disconnected/paused
+                        st.error(f"⚠️ Database Error: {e}")
 
                 if not context_text:
                     context_text = "No specific circulars found."
@@ -313,7 +317,7 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                     ai_response = model.generate_content(full_prompt)
                     answer = ai_response.text
                 except Exception as e:
-                    answer = f"System Error: {str(e)}"
+                    answer = f"⚠️ Generation Error: {str(e)}"
 
                 # Save & Display
                 st.session_state.messages.append({"role": "assistant", "content": answer, "sources": sources})
