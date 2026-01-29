@@ -268,22 +268,27 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         with st.chat_message("assistant"):
             with st.spinner("🔍 Analyzing regulations..."):
                 
-                # 1. EMBED
+                # 1. EMBED (With Auto-Fallback)
                 vector = []
                 try:
+                    # Try newest model (004)
                     vector = genai.embed_content(model="models/text-embedding-004", content=last_prompt, task_type="retrieval_query")['embedding']
-                except Exception as e:
-                    st.error(f"⚠️ Embedding Error: {e}")
-                    vector = []
+                except:
+                    try:
+                        # Fallback to older, standard model (001) if 004 fails
+                        vector = genai.embed_content(model="models/embedding-001", content=last_prompt, task_type="retrieval_query")['embedding']
+                    except Exception as e:
+                        st.error(f"⚠️ Embedding Error: {e}")
+                        vector = []
 
                 # 2. SEARCH
                 context_text = ""
                 sources = []
-                debug_info = [] # Store raw results
+                debug_info = []
                 
                 if vector:
                     try:
-                        # Low threshold to ensure we catch everything
+                        # Threshold 0.1 for maximum recall
                         response = supabase.rpc("match_documents", {
                             "query_embedding": vector, "match_threshold": 0.1, "match_count": 10
                         }).execute()
@@ -327,7 +332,7 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                 # Save & Display
                 st.session_state.messages.append({"role": "assistant", "content": answer, "sources": sources})
                 
-                # Optional Debug
+                # Debug Info
                 if debug_info:
                     with st.expander("🛠️ Debug Information"):
                         st.write(debug_info)
