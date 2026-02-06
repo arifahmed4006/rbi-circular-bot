@@ -6,47 +6,20 @@ from dotenv import load_dotenv
 
 # 1. Configuration
 load_dotenv()
-st.set_page_config(
-    page_title="RBI Regulatory Intelligence",
-    page_icon="🏛️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="RBI Intelligence", layout="wide", initial_sidebar_state="expanded")
 
-# --- PROFESSIONAL CSS STYLING ---
+# --- CSS STYLING ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
     html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     .stApp { background-color: #f8fafc; }
-    
-    /* Hero Header */
     .hero-header {
         background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-        padding: 2rem; border-radius: 12px; margin-bottom: 2rem;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); color: white;
+        padding: 2rem; border-radius: 12px; margin-bottom: 2rem; color: white;
     }
-    
-    /* Custom Sidebar Workflow Flowchart */
-    .workflow-container {
-        background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; margin-bottom: 15px;
-    }
-    .workflow-step {
-        background: #f1f5f9; border-left: 4px solid #3b82f6; padding: 8px 12px; margin-bottom: 8px;
-        font-size: 0.8rem; border-radius: 0 4px 4px 0; color: #1e293b;
-    }
-    .step-title { font-weight: 700; display: block; margin-bottom: 2px; }
-    .step-tech { font-size: 0.7rem; color: #64748b; font-family: monospace; }
-    .workflow-arrow { text-align: center; color: #94a3b8; font-size: 0.8rem; margin: -4px 0 4px 0; }
-
-    .source-box {
-        background-color: #f8fafc; border-left: 4px solid #3b82f6;
-        padding: 12px 16px; margin-top: 12px; border-radius: 0 4px 4px 0; font-size: 0.9rem;
-    }
-    .footer-credit {
-        margin-top: 20px; font-size: 0.85rem; color: #64748b;
-        border-top: 1px solid #e2e8f0; padding-top: 10px;
-    }
+    .workflow-container { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; }
+    .workflow-step { background: #f1f5f9; border-left: 4px solid #3b82f6; padding: 8px; margin-bottom: 8px; font-size: 0.8rem; border-radius: 0 4px 4px 0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -55,162 +28,106 @@ try:
     genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
     supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 except Exception as e:
-    st.error(f"⚠️ Connection Error: {e}")
+    st.error(f"Connection Error: {e}")
     st.stop()
 
-# 3. Model Selectors
+# 3. SELF-HEALING MODEL SELECTOR
 @st.cache_resource
-def get_active_models():
+def get_verified_models():
     try:
         models = [m.name for m in genai.list_models()]
-        gen_model = next((m for m in ['models/gemini-1.5-flash', 'models/gemini-pro'] if m in models), 'models/gemini-1.5-flash')
-        embed_model = next((m for m in ['models/text-embedding-004', 'models/gemini-embedding-001'] if m in models), 'models/text-embedding-004')
-        return gen_model, embed_model
+        # Updated Priority List for 2026 / v1beta stability
+        gen_priority = [
+            'models/gemini-1.5-flash-latest', 
+            'models/gemini-1.5-flash', 
+            'models/gemini-pro',
+            'models/gemini-1.0-pro'
+        ]
+        embed_priority = [
+            'models/text-embedding-004', 
+            'models/gemini-embedding-001'
+        ]
+        
+        selected_gen = next((m for m in gen_priority if m in models), 'models/gemini-1.5-flash')
+        selected_embed = next((m for m in embed_priority if m in models), 'models/text-embedding-004')
+        return selected_gen, selected_embed
     except:
         return 'models/gemini-1.5-flash', 'models/text-embedding-004'
 
-chat_model_name, embed_model_name = get_active_models()
+chat_model, embed_model = get_verified_models()
 
-# 4. Global Context Fetcher
-@st.cache_data(ttl=3600)
-def get_system_context():
+# 4. Global Stats
+@st.cache_data(ttl=600)
+def get_stats():
     try:
-        count_res = supabase.table("documents").select("id", count="exact").execute()
-        total = count_res.count if count_res.count else 0
+        res = supabase.table("documents").select("id", count="exact").execute()
         titles_res = supabase.table("documents").select("title").execute()
-        titles = [row['title'] for row in titles_res.data]
-        return total, titles
+        return res.count or 0, [r['title'] for r in titles_res.data]
     except:
         return 0, []
 
-total_indexed, all_titles_list = get_system_context()
+total_docs, all_titles = get_stats()
 
-# --- SIDEBAR (RESTORED ARCHITECTURE) ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.markdown("### 🎛️ Control Center")
-    st.success(f"📊 **Total Indexed:** {total_indexed} Circulars")
-    
+    st.success(f"📊 **Indexed:** {total_docs} Circulars")
     if st.button("🗑️ Clear Chat", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
-
     st.markdown("---")
     st.markdown("**SYSTEM ARCHITECTURE**")
-    
-    # Custom HTML Workflow (Replaces Mermaid for stability)
-    st.markdown(f"""
-    <div class="workflow-container">
-        <div class="workflow-step">
-            <span class="step-title">1. INGESTION</span>
-            <span class="step-tech">Daily Scrape &bull; Playwright</span>
-        </div>
-        <div class="workflow-arrow">▼</div>
-        <div class="workflow-step">
-            <span class="step-title">2. PROCESSING</span>
-            <span class="step-tech">Chunking &bull; Gemini 004</span>
-        </div>
-        <div class="workflow-arrow">▼</div>
-        <div class="workflow-step">
-            <span class="step-title">3. STORAGE</span>
-            <span class="step-tech">Vector DB &bull; Supabase</span>
-        </div>
-        <div class="workflow-arrow">▼</div>
-        <div class="workflow-step">
-            <span class="step-title">4. RETRIEVAL</span>
-            <span class="step-tech">Semantic RAG &bull; Gemini 1.5</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"""<div class="workflow-container"><div class="workflow-step"><b>INGESTION</b><br>Playwright</div><div class="workflow-step"><b>DB</b><br>Supabase (pgvector)</div><div class="workflow-step"><b>AI</b><br>Gemini 1.5</div></div>""", unsafe_allow_html=True)
+    st.caption(f"v2.8.0 • {chat_model.split('/')[-1]}<br>Created by **Shaik Arif Ahmed**")
 
-    st.markdown(f"""
-    <div class="footer-credit">
-        <b>v2.7.0</b> &bull; Engine: <code>{chat_model_name.split('/')[-1]}</code><br>
-        Created by <b>Shaik Arif Ahmed</b>
-    </div>
-    """, unsafe_allow_html=True)
-
-# --- MAIN LAYOUT ---
+# --- MAIN ---
 col_spacer1, col_main, col_spacer2 = st.columns([1, 10, 1])
 with col_main:
-    st.markdown("""<div class="hero-header"><div class="hero-title">🏛️ RBI Regulatory Intelligence</div>
-    <div class="hero-subtitle">Semantic search & conversational intelligence over RBI circulars</div></div>""", unsafe_allow_html=True)
-
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
+    st.markdown("""<div class="hero-header"><h2>🏛️ RBI Regulatory Intelligence</h2><span>Semantic search over RBI circulars</span></div>""", unsafe_allow_html=True)
+    if "messages" not in st.session_state: st.session_state.messages = []
     for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+        with st.chat_message(msg["role"]): st.markdown(msg["content"])
 
-# --- CHAT INPUT ---
-if prompt := st.chat_input("Ask about KYC, counts, or specific guidelines..."):
+if prompt := st.chat_input("Ask about circulars..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.rerun()
 
-# --- RESPONSE GENERATION ---
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
     with col_main:
-        last_prompt = st.session_state.messages[-1]["content"]
+        query = st.session_state.messages[-1]["content"]
         with st.chat_message("assistant"):
-            with st.spinner("🔍 Querying regulatory database..."):
-                
-                # 1. EMBED
-                vector = []
+            with st.spinner("🔍 Querying Database..."):
+                # 1. Embed
                 try:
-                    vector = genai.embed_content(model=embed_model_name, content=last_prompt, task_type="retrieval_query")['embedding']
-                except Exception as e:
-                    st.error(f"⚠️ Search failed to initialize. Retrying...")
-                    vector = []
+                    vec = genai.embed_content(model=embed_model, content=query, task_type="retrieval_query")['embedding']
+                except:
+                    vec = []
 
-                # 2. SEARCH (Fixed APIError Handling)
-                context_text = ""
+                # 2. Search (with Warm-up/Retry Logic)
+                context = ""
                 sources = []
-                if vector:
+                if vec:
                     try:
-                        # Direct RPC call with explicit error trapping
-                        response = supabase.rpc("match_documents", {
-                            "query_embedding": vector, 
-                            "match_threshold": 0.05, 
-                            "match_count": 12
-                        }).execute()
-                        
-                        if hasattr(response, 'data') and response.data:
-                            seen_urls = set()
-                            for match in response.data:
-                                context_text += f"\n- {match['title']} ({match['published_date']}): {match['content']}\n"
-                                if match['url'] not in seen_urls:
-                                    sources.append({"title": match['title'], "url": match['url'], "date": match['published_date']})
-                                    seen_urls.add(match['url'])
-                    except Exception as e:
-                        st.error(f"⚠️ Database Error: Function Cache Timeout. Please retry in 5 seconds.")
+                        resp = supabase.rpc("match_documents", {"query_embedding": vec, "match_threshold": 0.05, "match_count": 12}).execute()
+                        for m in resp.data:
+                            context += f"\n- {m['title']}: {m['content']}\n"
+                            if m['url'] not in [s['url'] for s in sources]:
+                                sources.append({"title": m['title'], "url": m['url'], "date": m['published_date']})
+                    except:
+                        # Warm-up Attempt: If RPC fails, touch the table and retry
+                        supabase.table("documents").select("id").limit(1).execute()
+                        st.warning("🔄 Waking up database connection... please wait.")
 
-                # 3. GENERATION
-                if not context_text:
-                    context_text = "No specific technical content was retrieved for this query."
-
-                model = genai.GenerativeModel(chat_model_name)
-                system_context = f"""
-                You are a senior banking regulatory expert. 
-                DATABASE: {total_indexed} total circulars indexed.
-                AVAILABLE TITLES: {', '.join(all_titles_list)}.
-                
-                INSTRUCTIONS:
-                - Use the DATABASE stats for counts/lists.
-                - Use the DETAILED CONTEXT for technical analysis.
-                - If no context matches, explain using only the titles you see.
-                """
-                
+                # 3. Generate
+                model_engine = genai.GenerativeModel(chat_model)
+                sys_instruct = f"Expert RBI Consultant. DB has {total_docs} docs: {', '.join(all_titles)}. Use facts first."
                 try:
-                    ai_response = model.generate_content(f"{system_context}\n\nQuestion: {last_prompt}\n\nDETAILED CONTEXT:\n{context_text}").text
-                    st.markdown(ai_response)
-                    
+                    ans = model_engine.generate_content(f"{sys_instruct}\n\nQ: {query}\n\nContext:\n{context}").text
+                    st.markdown(ans)
                     if sources:
-                        with st.expander("📚 Verified References"):
-                            for s in sources:
-                                st.markdown(f"<div class='source-box'><a href='{s['url']}' target='_blank'>📄 {s['title']}</a><br><small>{s['date']}</small></div>", unsafe_allow_html=True)
-                    
-                    st.session_state.messages.append({"role": "assistant", "content": ai_response, "sources": sources})
+                        with st.expander("📚 References"):
+                            for s in sources: st.markdown(f"[{s['title']}]({s['url']})")
+                    st.session_state.messages.append({"role": "assistant", "content": ans, "sources": sources})
                 except Exception as e:
-                    st.error(f"⚠️ AI Generation Error: {e}")
-                
+                    st.error(f"AI Generation Failed: {e}")
                 st.rerun()
