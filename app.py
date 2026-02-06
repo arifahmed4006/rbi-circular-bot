@@ -52,12 +52,13 @@ except Exception as e:
     st.error(f"⚠️ Connection Error: {e}")
     st.stop()
 
-# 3. Robust Model Selector (Fixes 404 Issues)
+# 3. Robust Model Selector (Ensures connectivity for generation)
 @st.cache_resource
 def get_chat_model_name():
     try:
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        for preferred in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']:
+        # Prioritize 1.5 Flash for speed/reliability on free tier
+        for preferred in ['models/gemini-1.5-flash', 'models/gemini-pro']:
             if preferred in available_models: return preferred
         return available_models[0] if available_models else "models/gemini-pro"
     except:
@@ -65,13 +66,11 @@ def get_chat_model_name():
 
 chat_model_name = get_chat_model_name()
 
-# 4. Global Context Fetcher (Fixes "Wrong Answers" on counts/summaries)
+# 4. Metadata Fetcher (Ensures accuracy for counts and summaries)
 def get_system_context():
     try:
-        # Get actual count of unique documents
         count_res = supabase.table("documents").select("id", count="exact").execute()
         total = count_res.count if count_res.count else 0
-        # Get list of all titles for summarization
         titles_res = supabase.table("documents").select("title").execute()
         titles = [row['title'] for row in titles_res.data]
         return total, titles
@@ -101,7 +100,7 @@ with st.sidebar:
         """, unsafe_allow_html=True)
 
     st.markdown(
-        f"""<div class="footer-credit"><b>v2.5.0</b> • Engine: <code>{chat_model_name.split('/')[-1]}</code><br>
+        f"""<div class="footer-credit"><b>v2.6.0</b> • Engine: <code>{chat_model_name.split('/')[-1]}</code><br>
         Created by <b>Shaik Arif Ahmed</b></div>""", unsafe_allow_html=True
     )
 
@@ -118,7 +117,7 @@ with col_main:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-# --- CHAT INPUT (STICKY BOTTOM) ---
+# --- CHAT INPUT ---
 if prompt := st.chat_input("Ask about KYC, counts, or specific guidelines..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.rerun()
@@ -129,16 +128,23 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         last_prompt = st.session_state.messages[-1]["content"]
         with st.chat_message("assistant"):
             with st.spinner("🔍 Querying regulatory database..."):
-                # 1. Embed Query
+                # 1. Robust Embedding (Fixes 404 Error)
+                vector = []
                 try:
+                    # Preferred stable model for 2026
                     vector = genai.embed_content(model="models/text-embedding-004", content=last_prompt, task_type="retrieval_query")['embedding']
                 except:
-                    vector = genai.embed_content(model="models/embedding-001", content=last_prompt, task_type="retrieval_query")['embedding']
+                    try:
+                        # Fallback for older API versions
+                        vector = genai.embed_content(model="models/embedding-001", content=last_prompt, task_type="retrieval_query")['embedding']
+                    except Exception as e:
+                        st.error(f"⚠️ Embedding failed: {e}")
 
-                # 2. Semantic Search (Low threshold to catch relevant data)
+                # 2. Semantic Search
                 context_text = ""
                 sources = []
                 if vector:
+                    # Using RPC 'match_documents' (Threshold 0.1 for high recall)
                     response = supabase.rpc("match_documents", {
                         "query_embedding": vector, "match_threshold": 0.1, "match_count": 15
                     }).execute()
@@ -150,26 +156,26 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                             sources.append({"title": match['title'], "url": match['url'], "date": match['published_date']})
                             seen_urls.add(match['url'])
 
-                # 3. Synthesis with Metadata Awareness
+                # 3. AI Synthesis with Grounding
                 model = genai.GenerativeModel(chat_model_name)
                 
-                # We "anchor" the AI's logic to the actual database facts
+                # We feed the AI absolute truths from the database to prevent hallucinations on counts
                 system_context = f"""
                 You are a senior banking regulatory expert. 
                 DATABASE FACTS:
-                - There are exactly {total_indexed} RBI circulars indexed.
-                - Full list of titles: {', '.join(all_titles_list)}.
+                - There are exactly {total_indexed} RBI circulars currently in the database.
+                - The available titles are: {', '.join(all_titles_list)}.
                 
                 INSTRUCTIONS:
-                - If the user asks for a count or a list of circulars, refer ONLY to the DATABASE FACTS.
-                - For technical questions about rules, use the DETAILED CONTEXT below.
-                - If the answer is not present, state that you cannot find it in the current dataset.
+                - Use the FACTS above to answer counts or list queries.
+                - Use the DETAILED CONTEXT below for technical analysis.
+                - If data is missing, suggest checking the official RBI website.
                 """
                 
                 try:
                     ai_response = model.generate_content(f"{system_context}\n\nQuestion: {last_prompt}\n\nDETAILED CONTEXT:\n{context_text}").text
                 except Exception as e:
-                    ai_response = f"⚠️ System Error: {str(e)}"
+                    ai_response = f"⚠️ Generation Error: {str(e)}"
 
                 st.markdown(ai_response)
                 
