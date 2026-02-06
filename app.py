@@ -4,11 +4,16 @@ from supabase import create_client
 import os
 from dotenv import load_dotenv
 
-# 1. Configuration
+# 1. Configuration & Secrets
 load_dotenv()
-st.set_page_config(page_title="RBI Intelligence", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="RBI Regulatory Intelligence",
+    page_icon="🏛️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# --- CSS STYLING ---
+# --- UI STYLING ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
@@ -28,29 +33,12 @@ try:
     genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
     supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 except Exception as e:
-    st.error(f"Connection Error: {e}")
+    st.error(f"Setup Error: {e}")
     st.stop()
 
-# 3. SELECTOR (EXCLUDING QUOTA-LIMITED MODELS)
-@st.cache_resource
-def get_stable_models():
-    """Forces the app to use 1.5-Flash and 004-Embedding, skipping experimental 2.5 versions."""
-    try:
-        available = [m.name for m in genai.list_models()]
-        
-        # We EXPLICITLY target 1.5 Flash as it's the most reliable for Free Tier
-        chat = 'models/gemini-1.5-flash' if 'models/gemini-1.5-flash' in available else 'models/gemini-pro'
-        embed = 'models/text-embedding-004' if 'models/text-embedding-004' in available else 'models/embedding-001'
-        
-        return chat, embed
-    except:
-        return 'models/gemini-1.5-flash', 'models/text-embedding-004'
-
-chat_model, embed_model = get_stable_models()
-
-# 4. Global Stats
-@st.cache_data(ttl=300)
-def get_stats():
+# 3. GLOBAL STATS (FETCH ONCE)
+@st.cache_data(ttl=600)
+def get_db_stats():
     try:
         res = supabase.table("documents").select("id", count="exact").execute()
         titles_res = supabase.table("documents").select("title").execute()
@@ -58,7 +46,7 @@ def get_stats():
     except:
         return 0, []
 
-total_docs, all_titles = get_stats()
+total_docs, all_titles = get_db_stats()
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -69,66 +57,95 @@ with st.sidebar:
         st.rerun()
     st.markdown("---")
     st.markdown("**SYSTEM ARCHITECTURE**")
-    st.markdown(f"""<div class="workflow-container"><div class="workflow-step"><b>INGESTION</b><br>Playwright</div><div class="workflow-step"><b>DB</b><br>Supabase (pgvector)</div><div class="workflow-step"><b>AI</b><br>Gemini RAG</div></div>""", unsafe_allow_html=True)
-    st.caption(f"v3.0.0 • Stable Release")
-    st.caption(f"Created by **Shaik Arif Ahmed**")
+    st.markdown("""<div class="workflow-container"><div class="workflow-step"><b>INGESTION</b><br>Daily Scrape</div><div class="workflow-step"><b>DB</b><br>Supabase (pgvector)</div><div class="workflow-step"><b>AI</b><br>Gemini 1.5</div></div>""", unsafe_allow_html=True)
+    st.caption("v3.1.0 • Stable Release")
+    st.caption("Created by **Shaik Arif Ahmed**")
 
-# --- MAIN ---
+# --- MAIN UI ---
 col_spacer1, col_main, col_spacer2 = st.columns([1, 10, 1])
 with col_main:
-    st.markdown("""<div class="hero-header"><h2>🏛️ RBI Regulatory Intelligence</h2><span>Semantic search over RBI circulars</span></div>""", unsafe_allow_html=True)
-    if "messages" not in st.session_state: st.session_state.messages = []
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]): st.markdown(msg["content"])
+    st.markdown("""<div class="hero-header"><h2>🏛️ RBI Regulatory Intelligence</h2><span>Semantic search & conversational AI</span></div>""", unsafe_allow_html=True)
+    
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-if prompt := st.chat_input("Ask about circulars..."):
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+# --- CHAT INPUT ---
+if prompt := st.chat_input("Ask about KYC, counts, or specific circulars..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.rerun()
 
+# --- RESPONSE GENERATION ---
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
     with col_main:
-        query = st.session_state.messages[-1]["content"]
+        last_query = st.session_state.messages[-1]["content"]
         with st.chat_message("assistant"):
             with st.spinner("🔍 Processing..."):
-                # 1. Embed
-                vec = []
+                
+                # 1. EMBED (Explicit Model Name)
+                vector = []
                 try:
-                    # Using embed_content with task_type specifically for RAG
-                    result = genai.embed_content(model=embed_model, content=query, task_type="retrieval_query")
-                    vec = result['embedding']
+                    # Using the exact name 'models/embedding-001' which is the universal fallback
+                    embed_result = genai.embed_content(
+                        model="models/embedding-001", 
+                        content=last_query, 
+                        task_type="retrieval_query"
+                    )
+                    vector = embed_result['embedding']
                 except Exception as e:
-                    st.error(f"Embedding failed. Please refresh.")
-
-                # 2. Search
-                context = ""
-                sources = []
-                if vec:
+                    # If 001 fails, try text-embedding-004
                     try:
-                        resp = supabase.rpc("match_documents", {"query_embedding": vec, "match_threshold": 0.05, "match_count": 12}).execute()
-                        if resp.data:
-                            for m in resp.data:
-                                context += f"\n- {m['title']}: {m['content']}\n"
-                                if m['url'] not in [s['url'] for s in sources]:
-                                    sources.append({"title": m['title'], "url": m['url'], "date": m['published_date']})
-                    except Exception as e:
-                        st.warning("⚠️ Database connection reset. Retrying query...")
-                        # Direct fetch fallback
-                        supabase.table("documents").select("id").limit(1).execute()
+                        embed_result = genai.embed_content(
+                            model="models/text-embedding-004", 
+                            content=last_query, 
+                            task_type="retrieval_query"
+                        )
+                        vector = embed_result['embedding']
+                    except:
+                        st.error("⚠️ AI Embedding Service is temporarily unavailable.")
 
-                # 3. Generate (Hardened against 429)
+                # 2. SEARCH
+                context_text = ""
+                sources = []
+                if vector:
+                    try:
+                        response = supabase.rpc("match_documents", {
+                            "query_embedding": vector, 
+                            "match_threshold": 0.05, 
+                            "match_count": 10
+                        }).execute()
+                        
+                        if response.data:
+                            seen_urls = set()
+                            for m in response.data:
+                                context_text += f"\n- {m['title']}: {m['content']}\n"
+                                if m['url'] not in seen_urls:
+                                    sources.append({"title": m['title'], "url": m['url']})
+                                    seen_urls.add(m['url'])
+                    except Exception:
+                        st.warning("⚠️ Database connection slow, trying again...")
+
+                # 3. GENERATE (Explicit Model Name)
                 try:
-                    model_engine = genai.GenerativeModel(chat_model)
-                    sys_instruct = f"Senior RBI Consultant. DB has {total_docs} docs: {', '.join(all_titles)}. Answer ONLY based on context."
+                    # Hardcoded to 'gemini-1.5-flash' - most robust model for Free Tier
+                    model = genai.GenerativeModel('gemini-1.5-flash')
                     
-                    response = model_engine.generate_content(f"{sys_instruct}\n\nQ: {query}\n\nContext:\n{context}")
-                    ans = response.text
+                    sys_prompt = f"Expert RBI Consultant. DB has {total_docs} docs: {', '.join(all_titles)}. Use ONLY provided context."
+                    full_prompt = f"{sys_prompt}\n\nQ: {last_query}\n\nContext:\n{context_text}"
                     
-                    st.markdown(ans)
+                    ai_response = model.generate_content(full_prompt).text
+                    st.markdown(ai_response)
+                    
                     if sources:
                         with st.expander("📚 References"):
-                            for s in sources: st.markdown(f"[{s['title']}]({s['url']})")
-                    st.session_state.messages.append({"role": "assistant", "content": ans, "sources": sources})
+                            for s in sources:
+                                st.markdown(f"[{s['title']}]({s['url']})")
+                    
+                    st.session_state.messages.append({"role": "assistant", "content": ai_response, "sources": sources})
                 except Exception as e:
-                    st.error(f"AI Service is busy or quota exceeded. Error: {str(e)}")
+                    st.error(f"⚠️ AI Response Error: {e}")
                 
                 st.rerun()
