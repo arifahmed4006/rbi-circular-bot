@@ -4,7 +4,7 @@ from supabase import create_client
 import os
 from dotenv import load_dotenv
 
-# 1. Configuration & Secrets
+# 1. Configuration
 load_dotenv()
 st.set_page_config(
     page_title="RBI Regulatory Intelligence",
@@ -13,7 +13,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- PROFESSIONAL CSS STYLING ---
+# --- STYLING ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
@@ -28,23 +28,10 @@ st.markdown("""
         background-color: #f8fafc; border-left: 4px solid #3b82f6;
         padding: 12px 16px; margin-top: 12px; border-radius: 0 4px 4px 0; font-size: 0.9rem;
     }
-    .footer-credit {
-        margin-top: 20px; font-size: 0.85rem; color: #64748b;
-        border-top: 1px solid #e2e8f0; padding-top: 10px;
-    }
-    .flow-step {
-        background-color: #ffffff; padding: 8px 10px; border-radius: 6px;
-        font-size: 0.8rem; border: 1px solid #e2e8f0; margin-bottom: 4px;
-        display: flex; justify-content: space-between; align-items: center;
-    }
-    .tech-badge {
-        font-size: 0.7rem; background-color: #f1f5f9; padding: 2px 6px;
-        border-radius: 4px; color: #475569; font-weight: 600;
-    }
 </style>
 """, unsafe_allow_html=True)
 
-# 2. Setup Connections
+# 2. Connections
 try:
     genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
     supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
@@ -52,21 +39,33 @@ except Exception as e:
     st.error(f"⚠️ Connection Error: {e}")
     st.stop()
 
-# 3. Robust Model Selector (Ensures connectivity for generation)
+# 3. Model Selectors (Updated for 2026 Standards)
 @st.cache_resource
-def get_chat_model_name():
+def get_active_models():
+    """Finds the best available models for this API key."""
     try:
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        # Prioritize 1.5 Flash for speed/reliability on free tier
-        for preferred in ['models/gemini-1.5-flash', 'models/gemini-pro']:
-            if preferred in available_models: return preferred
-        return available_models[0] if available_models else "models/gemini-pro"
+        models = [m.name for m in genai.list_models()]
+        # Generation Model
+        gen_model = 'models/gemini-1.5-flash' # Default stable
+        for m in ['models/gemini-2.0-flash', 'models/gemini-1.5-flash']:
+            if m in models: 
+                gen_model = m
+                break
+        
+        # Embedding Model
+        embed_model = 'models/text-embedding-004' # Default stable
+        for m in ['models/text-embedding-004', 'models/gemini-embedding-001']:
+            if m in models:
+                embed_model = m
+                break
+                
+        return gen_model, embed_model
     except:
-        return "models/gemini-pro"
+        return 'models/gemini-1.5-flash', 'models/text-embedding-004'
 
-chat_model_name = get_chat_model_name()
+chat_model_name, embed_model_name = get_active_models()
 
-# 4. Metadata Fetcher (Ensures accuracy for counts and summaries)
+# 4. Global Context
 def get_system_context():
     try:
         count_res = supabase.table("documents").select("id", count="exact").execute()
@@ -82,29 +81,15 @@ total_indexed, all_titles_list = get_system_context()
 # --- SIDEBAR ---
 with st.sidebar:
     st.markdown("### 🎛️ Control Center")
-    st.markdown("**SYSTEM STATUS**")
-    st.markdown('<div style="background:#f0fdf4;color:#15803d;padding:4px 12px;border-radius:20px;text-align:center;font-weight:600;font-size:0.85rem;border:1px solid #bbf7d0;">🟢 Online</div>', unsafe_allow_html=True)
-    st.markdown(f"📊 **Total Indexed:** {total_indexed} Circulars")
-    
+    st.success(f"📊 **Total Indexed:** {total_indexed} Circulars")
     if st.button("🗑️ Clear Chat", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
-    
     st.markdown("---")
-    with st.expander("⚙️ System Architecture"):
-        st.markdown("""
-        <div class="flow-step"><span>🌐 Browser</span><span class="tech-badge">Playwright</span></div>
-        <div class="flow-step"><span>🔢 Embedding</span><span class="tech-badge">Gemini 004</span></div>
-        <div class="flow-step"><span>💾 Memory</span><span class="tech-badge">Supabase</span></div>
-        <div class="flow-step"><span>🤖 Synthesis</span><span class="tech-badge">Gemini 1.5</span></div>
-        """, unsafe_allow_html=True)
+    st.caption(f"**Engine:** `{chat_model_name.split('/')[-1]}`")
+    st.caption(f"Created by **Shaik Arif Ahmed**")
 
-    st.markdown(
-        f"""<div class="footer-credit"><b>v2.6.0</b> • Engine: <code>{chat_model_name.split('/')[-1]}</code><br>
-        Created by <b>Shaik Arif Ahmed</b></div>""", unsafe_allow_html=True
-    )
-
-# --- MAIN LAYOUT ---
+# --- MAIN UI ---
 col_spacer1, col_main, col_spacer2 = st.columns([1, 10, 1])
 with col_main:
     st.markdown("""<div class="hero-header"><div class="hero-title">🏛️ RBI Regulatory Intelligence</div>
@@ -128,25 +113,25 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         last_prompt = st.session_state.messages[-1]["content"]
         with st.chat_message("assistant"):
             with st.spinner("🔍 Querying regulatory database..."):
-                # 1. Robust Embedding (Fixes 404 Error)
+                
+                # 1. EMBED (Using discovered model)
                 vector = []
                 try:
-                    # Preferred stable model for 2026
-                    vector = genai.embed_content(model="models/text-embedding-004", content=last_prompt, task_type="retrieval_query")['embedding']
-                except:
+                    vector = genai.embed_content(model=embed_model_name, content=last_prompt, task_type="retrieval_query")['embedding']
+                except Exception as e:
+                    st.error(f"⚠️ Search temporary offline. Retrying with backup...")
+                    # Force one last try with the most basic name
                     try:
-                        # Fallback for older API versions
-                        vector = genai.embed_content(model="models/embedding-001", content=last_prompt, task_type="retrieval_query")['embedding']
-                    except Exception as e:
-                        st.error(f"⚠️ Embedding failed: {e}")
+                        vector = genai.embed_content(model="models/text-embedding-004", content=last_prompt, task_type="retrieval_query")['embedding']
+                    except:
+                        vector = []
 
-                # 2. Semantic Search
+                # 2. SEARCH
                 context_text = ""
                 sources = []
                 if vector:
-                    # Using RPC 'match_documents' (Threshold 0.1 for high recall)
                     response = supabase.rpc("match_documents", {
-                        "query_embedding": vector, "match_threshold": 0.1, "match_count": 15
+                        "query_embedding": vector, "match_threshold": 0.05, "match_count": 15
                     }).execute()
                     
                     seen_urls = set()
@@ -156,27 +141,20 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                             sources.append({"title": match['title'], "url": match['url'], "date": match['published_date']})
                             seen_urls.add(match['url'])
 
-                # 3. AI Synthesis with Grounding
+                # 3. GENERATION
                 model = genai.GenerativeModel(chat_model_name)
-                
-                # We feed the AI absolute truths from the database to prevent hallucinations on counts
                 system_context = f"""
                 You are a senior banking regulatory expert. 
-                DATABASE FACTS:
-                - There are exactly {total_indexed} RBI circulars currently in the database.
-                - The available titles are: {', '.join(all_titles_list)}.
+                DATABASE STATUS: {total_indexed} total circulars indexed.
+                AVAILABLE TITLES: {', '.join(all_titles_list)}.
                 
                 INSTRUCTIONS:
-                - Use the FACTS above to answer counts or list queries.
-                - Use the DETAILED CONTEXT below for technical analysis.
-                - If data is missing, suggest checking the official RBI website.
+                - Use the DATABASE STATUS and TITLES for general counts/lists.
+                - Use the DETAILED CONTEXT for technical answers.
+                - If the DETAILED CONTEXT is empty, explain that you can see the titles but cannot access the inner content right now due to a search indexing delay.
                 """
                 
-                try:
-                    ai_response = model.generate_content(f"{system_context}\n\nQuestion: {last_prompt}\n\nDETAILED CONTEXT:\n{context_text}").text
-                except Exception as e:
-                    ai_response = f"⚠️ Generation Error: {str(e)}"
-
+                ai_response = model.generate_content(f"{system_context}\n\nQuestion: {last_prompt}\n\nDETAILED CONTEXT:\n{context_text}").text
                 st.markdown(ai_response)
                 
                 if sources:
