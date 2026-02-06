@@ -23,7 +23,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 2. Connections
+# 2. Setup Connections
 try:
     genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
     supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
@@ -31,33 +31,35 @@ except Exception as e:
     st.error(f"Connection Error: {e}")
     st.stop()
 
-# 3. SELF-HEALING MODEL SELECTOR
+# 3. DYNAMIC MODEL DISCOVERY (The Fix for 404s)
 @st.cache_resource
-def get_verified_models():
+def discover_models():
+    """Queries the API to find exactly what models are available to THIS key."""
     try:
-        models = [m.name for m in genai.list_models()]
-        # Updated Priority List for 2026 / v1beta stability
-        gen_priority = [
-            'models/gemini-1.5-flash-latest', 
-            'models/gemini-1.5-flash', 
-            'models/gemini-pro',
-            'models/gemini-1.0-pro'
-        ]
-        embed_priority = [
-            'models/text-embedding-004', 
-            'models/gemini-embedding-001'
-        ]
+        available = [m.name for m in genai.list_models()]
         
-        selected_gen = next((m for m in gen_priority if m in models), 'models/gemini-1.5-flash')
-        selected_embed = next((m for m in embed_priority if m in models), 'models/text-embedding-004')
-        return selected_gen, selected_embed
-    except:
-        return 'models/gemini-1.5-flash', 'models/text-embedding-004'
+        # Selection Logic for Generation
+        gen_opts = [m for m in available if 'generateContent' in next(mod.supported_generation_methods for mod in genai.list_models() if mod.name == m)]
+        # Filter for Flash or Pro specifically
+        chat = next((m for m in gen_opts if '1.5-flash' in m), 
+               next((m for m in gen_opts if 'gemini-pro' in m), 
+               gen_opts[0] if gen_opts else 'models/gemini-pro'))
+        
+        # Selection Logic for Embedding
+        embed_opts = [m for m in available if 'embedContent' in next(mod.supported_generation_methods for mod in genai.list_models() if mod.name == m)]
+        embed = next((m for m in embed_opts if 'text-embedding-004' in m), 
+                next((m for m in embed_opts if 'embedding' in m), 
+                embed_opts[0] if embed_opts else 'models/text-embedding-004'))
+        
+        return chat, embed
+    except Exception as e:
+        # Emergency hardcoded fallbacks if discovery fails
+        return 'models/gemini-pro', 'models/text-embedding-004'
 
-chat_model, embed_model = get_verified_models()
+chat_model, embed_model = discover_models()
 
 # 4. Global Stats
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=300)
 def get_stats():
     try:
         res = supabase.table("documents").select("id", count="exact").execute()
@@ -77,8 +79,10 @@ with st.sidebar:
         st.rerun()
     st.markdown("---")
     st.markdown("**SYSTEM ARCHITECTURE**")
-    st.markdown(f"""<div class="workflow-container"><div class="workflow-step"><b>INGESTION</b><br>Playwright</div><div class="workflow-step"><b>DB</b><br>Supabase (pgvector)</div><div class="workflow-step"><b>AI</b><br>Gemini 1.5</div></div>""", unsafe_allow_html=True)
-    st.caption(f"v2.8.0 • {chat_model.split('/')[-1]}<br>Created by **Shaik Arif Ahmed**")
+    st.markdown(f"""<div class="workflow-container"><div class="workflow-step"><b>INGESTION</b><br>Playwright</div><div class="workflow-step"><b>DB</b><br>Supabase (pgvector)</div><div class="workflow-step"><b>AI</b><br>Gemini RAG</div></div>""", unsafe_allow_html=True)
+    # Display the EXACT model names being used to avoid confusion
+    st.caption(f"v2.9.0 • {chat_model.split('/')[-1]}")
+    st.caption(f"Created by **Shaik Arif Ahmed**")
 
 # --- MAIN ---
 col_spacer1, col_main, col_spacer2 = st.columns([1, 10, 1])
@@ -96,32 +100,35 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
     with col_main:
         query = st.session_state.messages[-1]["content"]
         with st.chat_message("assistant"):
-            with st.spinner("🔍 Querying Database..."):
+            with st.spinner("🔍 Processing..."):
                 # 1. Embed
+                vec = []
                 try:
                     vec = genai.embed_content(model=embed_model, content=query, task_type="retrieval_query")['embedding']
-                except:
-                    vec = []
+                except Exception as e:
+                    st.error(f"Embedding failed with {embed_model}. Trying discovery...")
+                    chat_model, embed_model = discover_models() # Refresh models live
 
-                # 2. Search (with Warm-up/Retry Logic)
+                # 2. Search
                 context = ""
                 sources = []
                 if vec:
                     try:
                         resp = supabase.rpc("match_documents", {"query_embedding": vec, "match_threshold": 0.05, "match_count": 12}).execute()
-                        for m in resp.data:
-                            context += f"\n- {m['title']}: {m['content']}\n"
-                            if m['url'] not in [s['url'] for s in sources]:
-                                sources.append({"title": m['title'], "url": m['url'], "date": m['published_date']})
+                        if resp.data:
+                            for m in resp.data:
+                                context += f"\n- {m['title']}: {m['content']}\n"
+                                if m['url'] not in [s['url'] for s in sources]:
+                                    sources.append({"title": m['title'], "url": m['url'], "date": m['published_date']})
                     except:
-                        # Warm-up Attempt: If RPC fails, touch the table and retry
+                        st.warning("⚠️ Database connection reset. Retrying query...")
+                        # One-time direct retry
                         supabase.table("documents").select("id").limit(1).execute()
-                        st.warning("🔄 Waking up database connection... please wait.")
 
                 # 3. Generate
-                model_engine = genai.GenerativeModel(chat_model)
-                sys_instruct = f"Expert RBI Consultant. DB has {total_docs} docs: {', '.join(all_titles)}. Use facts first."
                 try:
+                    model_engine = genai.GenerativeModel(chat_model)
+                    sys_instruct = f"Senior RBI Consultant. DB has {total_docs} docs: {', '.join(all_titles)}. Use facts."
                     ans = model_engine.generate_content(f"{sys_instruct}\n\nQ: {query}\n\nContext:\n{context}").text
                     st.markdown(ans)
                     if sources:
@@ -129,5 +136,5 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                             for s in sources: st.markdown(f"[{s['title']}]({s['url']})")
                     st.session_state.messages.append({"role": "assistant", "content": ans, "sources": sources})
                 except Exception as e:
-                    st.error(f"AI Generation Failed: {e}")
+                    st.error(f"AI Failed: {e}. Model used: {chat_model}")
                 st.rerun()
