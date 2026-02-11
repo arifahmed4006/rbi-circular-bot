@@ -10,22 +10,38 @@ from supabase import create_client
 import google.generativeai as genai
 
 # 1. Configuration
+# Note: Use 'gemini-embedding-001' for high-fidelity 3072-dimension vectors.
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 
 def get_gemini_embedding(text):
+    """
+    Generates a 3072-dimension embedding using the latest stable model.
+    """
     try:
-        return genai.embed_content(model="models/text-embedding-004", content=text, task_type="retrieval_document")['embedding']
-    except:
+        # Task type 'retrieval_document' is optimized for indexing chunks.
+        result = genai.embed_content(
+            model="models/gemini-embedding-001",
+            content=text,
+            task_type="retrieval_document"
+        )
+        return result['embedding']
+    except Exception as e:
+        print(f"❌ Embedding Error: {e}")
         return []
 
 def generate_summary(text):
+    """
+    Generates a concise 2-sentence summary using Gemini 1.5 Flash.
+    """
     try:
-        model = genai.GenerativeModel('gemini-pro')
-        prompt = f"Summarize the following RBI circular in 2 simple sentences for a banker:\n\n{text[:2000]}"
+        # Switched to 'gemini-1.5-flash' for faster, more efficient summarization.
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = f"Summarize the following RBI circular in 2 crisp sentences for a banking professional:\n\n{text[:3000]}"
         response = model.generate_content(prompt)
-        return response.text
-    except:
+        return response.text.strip()
+    except Exception as e:
+        print(f"❌ Summary Error: {e}")
         return "Summary unavailable."
 
 def send_email_notification(new_circulars):
@@ -41,53 +57,31 @@ def send_email_notification(new_circulars):
     msg['From'] = sender
     msg['To'] = recipients
 
-    # --- SCENARIO 1: NO NEW CIRCULARS ---
     if not new_circulars:
         msg['Subject'] = "✅ RBI Daily Report: No New Circulars"
-        html_content = """
+        html_content = f"""
         <html>
           <body style="font-family: Arial, sans-serif; color: #333;">
             <h2 style="color: #555;">🏦 RBI Daily Status Report</h2>
-            <p>Our system scanned the RBI website at 9:00 AM.</p>
+            <p>Our system scanned the RBI website at {datetime.datetime.now().strftime('%I:%M %p')}.</p>
             <div style="background-color: #e6fffa; border: 1px solid #b2f5ea; padding: 15px; border-radius: 5px; color: #234e52;">
                 <strong>Status:</strong> No new circulars were published in the last 24 hours.
             </div>
-            <hr>
-            <p style="font-size: 12px; color: #888;">
-                <a href="https://rbi-circular-bot.streamlit.app/">Visit Dashboard</a>
-            </p>
           </body>
         </html>
         """
-
-    # --- SCENARIO 2: NEW CIRCULARS FOUND ---
     else:
         msg['Subject'] = f"📢 RBI Update: {len(new_circulars)} New Circulars Detected"
-        html_content = """
-        <html>
-          <body style="font-family: Arial, sans-serif; color: #333;">
-            <h2 style="color: #0F52BA;">🏦 New RBI Circulars Detected</h2>
-            <p>The following updates were found during the daily scan:</p>
-            <hr>
-        """
+        html_content = """<html><body style="font-family: Arial, sans-serif; color: #333;">"""
+        html_content += """<h2 style="color: #0F52BA;">🏦 New RBI Circulars Detected</h2>"""
         for item in new_circulars:
             html_content += f"""
-            <div style="margin-bottom: 20px;">
+            <div style="margin-bottom: 20px; border-left: 4px solid #0F52BA; padding-left: 15px;">
                 <h3 style="margin: 0;"><a href="{item['url']}" style="color: #0F52BA; text-decoration: none;">{item['title']}</a></h3>
-                <p style="font-size: 12px; color: #666; margin-top: 2px;">{item['date']}</p>
-                <p style="background-color: #f4f6f9; padding: 10px; border-radius: 5px; font-style: italic;">
-                    "{item['summary']}"
-                </p>
-            </div>
-            """
-        html_content += """
-            <hr>
-            <p style="font-size: 12px; color: #888;">
-                <a href="https://rbi-circular-bot.streamlit.app/">Visit Dashboard</a>
-            </p>
-          </body>
-        </html>
-        """
+                <p style="font-size: 11px; color: #888;">{item['date']}</p>
+                <p style="background-color: #f8f9fa; padding: 10px; border-radius: 5px;">{item['summary']}</p>
+            </div>"""
+        html_content += "</body></html>"
 
     msg.set_content("Please view in HTML compatible client.")
     msg.add_alternative(html_content, subtype='html')
@@ -99,90 +93,97 @@ def send_email_notification(new_circulars):
             smtp.send_message(msg)
         print("✅ Email notification sent successfully!")
     except Exception as e:
-        print(f"❌ Failed to send email: {e}")
+        print(f"❌ Email Failed: {e}")
 
 def run_scraper():
-    print("--- Starting Daily Scraper ---")
+    print(f"--- Starting Daily Scraper: {datetime.datetime.now()} ---")
     new_items_found = [] 
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True) 
         page = browser.new_page()
-        page.goto("https://www.rbi.org.in/scripts/bs_circularindexdisplay.aspx", timeout=60000)
+        
+        try:
+            page.goto("https://www.rbi.org.in/scripts/bs_circularindexdisplay.aspx", timeout=60000)
+            rows = page.query_selector_all("table tr")
+        except Exception as e:
+            print(f"❌ Scraper Failed to load RBI page: {e}")
+            browser.close()
+            return
 
-        rows = page.query_selector_all("table tr")
-        print(f"Found {len(rows)} rows.")
-
-        for i, row in enumerate(rows):
-            if i < 2: continue 
-            
+        # Start from row 2 (skipping headers)
+        for i, row in enumerate(rows[2:]):
             cols = row.query_selector_all("td")
             if len(cols) < 4: continue 
             
             date_text = cols[1].inner_text().strip()
             try:
                 pub_date = datetime.datetime.strptime(date_text, "%d.%m.%Y").date()
-            except:
-                continue
+            except: continue
 
-            # Only process recent items (last 3 days)
-            today = datetime.date.today()
-            if (today - pub_date).days > 3: 
-                continue
+            # Only process very recent items
+            if (datetime.date.today() - pub_date).days > 3: continue
 
             link_el = cols[0].query_selector("a")
             if not link_el: continue
             href = link_el.get_attribute("href")
-            if not href.startswith("http"): href = f"https://www.rbi.org.in/scripts/{href}"
+            if not href.startswith("http"): 
+                href = f"https://www.rbi.org.in/scripts/{href}"
             
             title = cols[3].inner_text().strip()
 
-            # Check Database
+            # Deduplication Check
             exists = supabase.table("documents").select("id").eq("url", href).execute()
-            if exists.data:
-                continue # Skip existing
+            if exists.data: continue 
 
-            # New Item Found
-            print(f"🆕 NEW FOUND: {title}")
+            print(f"🆕 NEW CIRCULAR: {title}")
             
-            # Save to DB
+            # 1. Insert Metadata
             data = supabase.table("documents").insert({
-                "title": title, "url": href, "published_date": str(pub_date)
+                "title": title, 
+                "url": href, 
+                "published_date": str(pub_date)
             }).execute()
             doc_id = data.data[0]['id']
 
-            # Get Content & Summarize
+            # 2. Get Full Text
             circular_page = browser.new_page()
-            circular_page.goto(href, timeout=60000)
             try:
+                circular_page.goto(href, timeout=60000)
                 full_text = circular_page.inner_text("body")
+                circular_page.close()
             except:
                 full_text = ""
-            circular_page.close()
+                circular_page.close()
 
             summary = "No content available."
             if full_text:
                 summary = generate_summary(full_text)
-                chunks = [full_text[i:i+1000] for i in range(0, len(full_text), 1000)]
-                for chunk in chunks[:10]:
+                # Chunking: 1000 characters with 100 overlap for better context
+                chunks = [full_text[i:i+1000] for i in range(0, len(full_text), 900)]
+                
+                # Insert chunks with 3072-dim embeddings
+                chunk_payload = []
+                for chunk in chunks[:15]: # Processing first 15 chunks
                     vector = get_gemini_embedding(chunk)
                     if vector:
-                        supabase.table("document_chunks").insert({
-                            "document_id": doc_id, "content": chunk, "embedding": vector
-                        }).execute()
-                        time.sleep(0.5)
+                        chunk_payload.append({
+                            "document_id": doc_id, 
+                            "content": chunk, 
+                            "embedding": vector
+                        })
+                
+                if chunk_payload:
+                    supabase.table("document_chunks").insert(chunk_payload).execute()
+                    print(f"✅ Indexed {len(chunk_payload)} chunks.")
 
             new_items_found.append({
-                "title": title,
-                "url": href,
-                "date": str(pub_date),
-                "summary": summary
+                "title": title, "url": href, "date": str(pub_date), "summary": summary
             })
 
         browser.close()
 
-    # --- FINAL STEP: ALWAYS EMAIL ---
-    print(f"🚀 Sending daily report (Items found: {len(new_items_found)})...")
+    print(f"🚀 Scan complete. Found {len(new_items_found)} new updates.")
     send_email_notification(new_items_found)
 
 if __name__ == "__main__":
