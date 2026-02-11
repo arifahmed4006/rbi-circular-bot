@@ -2,8 +2,8 @@ name: Daily RBI Scraper
 
 on:
   schedule:
-    - cron: '30 3 * * *'  # Runs at 9:00 AM IST
-  workflow_dispatch:      # Allows manual trigger
+    - cron: '30 3 * * *'  # Runs at 9:00 AM IST daily
+  workflow_dispatch:      # Allows manual trigger from the Actions tab
 
 jobs:
   scrape:
@@ -15,11 +15,12 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.10' # Upgraded from 3.9 for better support
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          pip install playwright supabase google-genai python-dotenv
           python -m playwright install chromium
 
       - name: Run Scraper
@@ -30,7 +31,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           
-          # NEW: Email Credentials (The Missing Bridge)
+          # Email Credentials
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_RECIPIENTS: ${{ secrets.EMAIL_RECIPIENTS }}
