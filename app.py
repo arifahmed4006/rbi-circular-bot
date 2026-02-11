@@ -55,11 +55,10 @@ if prompt := st.chat_input("Ask about RBI Circulars..."):
         query_embedding = []
         try:
             embedding_response = genai.embed_content(
-                model="models/text-embedding-004", 
+                model="models/text-embedding-001", 
                 content=prompt,
                 task_type="retrieval_query",
-                output_dimensionality=3072
-            )
+                )
             query_embedding = embedding_response['embedding']
         except Exception as e:
             st.error(f"Embedding Error: {e}")
@@ -108,3 +107,4 @@ if prompt := st.chat_input("Ask about RBI Circulars..."):
 
         st.markdown(answer)
         st.session_state.messages.append({"role": "assistant", "content": answer})
+
