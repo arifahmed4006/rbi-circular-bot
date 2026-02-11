@@ -11,7 +11,7 @@ client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 
 def get_gemini_embedding(text):
-    """Generates 3072-dimension embeddings for high-fidelity search."""
+    """Generates 3072-dimension embeddings."""
     try:
         result = client.models.embed_content(
             model="text-embedding-004",
@@ -29,45 +29,43 @@ def run_scraper():
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # Using a full browser context to handle RBI's specific table rendering
-        context = browser.new_context(viewport={'width': 1920, 'height': 1080})
+        # Use a real browser context to ensure table rendering
+        context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         page = context.new_page()
         
         try:
             print("Navigating to RBI Index...")
-            page.goto("https://www.rbi.org.in/scripts/bs_circularindexdisplay.aspx", timeout=90000, wait_until="networkidle")
+            # We wait for 'domcontentloaded' instead of 'networkidle' to act on the preloaded data
+            page.goto("https://www.rbi.org.in/scripts/bs_circularindexdisplay.aspx", timeout=90000, wait_until="domcontentloaded")
             
-            # Targeting the specific table class visible in your image
-            page.wait_for_selector("table.table-common", timeout=30000)
-            
-            # Small delay to ensure all dynamic rows are painted
-            time.sleep(3)
+            # No wait_for_selector needed if rows are preloaded. 
+            # We simply give the browser a 2-second breath.
+            time.sleep(2)
 
         except Exception as e:
-            print(f"❌ Initial Page Load Failed: {e}")
+            print(f"❌ Navigation Failed: {e}")
             browser.close()
             return
 
-        # Explicitly selecting only the rows within the common table
-        rows = page.query_selector_all("table.table-common tr")
-        print(f"Detected {len(rows)} potential rows in the table.")
+        # Direct extraction of all table rows on the page
+        rows = page.query_selector_all("tr")
+        print(f"Total rows detected: {len(rows)}")
 
         count = 0
         for i, row in enumerate(rows):
             cols = row.query_selector_all("td")
-            # RBI rows have 5 main columns: Number, Date, Dept, Subject, Recipient
+            # We only process rows that have at least 4 columns (Date and Subject)
             if len(cols) < 4: continue
             
             date_text = cols[1].inner_text().strip()
             try:
-                # Parsing the 11.2.2026 format seen in your image
+                # Matches the 11.2.2026 format from the site
                 pub_date = datetime.datetime.strptime(date_text, "%d.%m.%Y").date()
             except: continue
 
-            # Filter for 2026 automation only
+            # Filter for 2026
             if pub_date < start_of_2026:
-                print(f"Reached historical data ({pub_date}). Stopping.")
-                break
+                continue
 
             link_el = cols[0].query_selector("a")
             if not link_el: continue
@@ -85,7 +83,6 @@ def run_scraper():
 
             print(f"🆕 [{count+1}] Processing: {title[:70]}...")
             
-            # Insert Metadata
             try:
                 data = supabase.table("documents").insert({
                     "title": title, 
@@ -94,21 +91,19 @@ def run_scraper():
                 }).execute()
                 doc_id = data.data[0]['id']
             except Exception as e:
-                print(f"⚠️ Metadata insertion failed: {e}")
+                print(f"   ⚠️ Metadata insertion failed: {e}")
                 continue
 
-            # Extract Content from child page
+            # Content Extraction from Circular Link
             cp = context.new_page()
             try:
                 cp.goto(href, timeout=60000)
-                cp.wait_for_selector("body")
                 full_text = cp.inner_text("body")
             except:
                 full_text = ""
             cp.close()
 
             if full_text:
-                # Optimized chunking with 100-character overlap
                 chunks = [full_text[x:x+1000] for x in range(0, len(full_text), 900)]
                 chunk_payload = []
                 
@@ -123,10 +118,9 @@ def run_scraper():
                 
                 if chunk_payload:
                     supabase.table("document_chunks").insert(chunk_payload).execute()
-                    print(f"   ✅ Saved {len(chunk_payload)} chunks.")
             
             count += 1
-            time.sleep(1) # Gentle rate limiting
+            time.sleep(1) # Rate limiting
 
         browser.close()
     print(f"--- 2026 Ingest Successful. Total New Items: {count} ---")
