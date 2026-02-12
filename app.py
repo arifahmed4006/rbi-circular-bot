@@ -18,6 +18,7 @@ except Exception as e:
 # 3. Setup Title
 st.set_page_config(page_title="RBI Smart Assistant", layout="wide")
 st.title("🏦 RBI Circular Assistant")
+st.markdown("Querying RBI Circulars from 2025-2026 using Gemini & Supabase Vector Search.")
 
 # --- AUTO-DETECT CHAT MODEL ---
 @st.cache_resource
@@ -41,17 +42,16 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-if prompt := st.chat_input("Ask about RBI Circulars..."):
+if prompt := st.chat_input("Ask about 2026 RBI Circulars..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
         # A. Get Embedding (FIXED FOR BATCH/LIST ERRORS)
-        query_embedding = []
+        query_embedding = None
         try:
-            # We use embed_content with a list [prompt]
-            # This version avoids the 'requests[]' and 'null to object' errors
+            # Wrap prompt in [] to satisfy the library requirement for a list
             response = genai.embed_content(
                 model="models/gemini-embedding-001",
                 content=[prompt],
@@ -59,7 +59,7 @@ if prompt := st.chat_input("Ask about RBI Circulars..."):
                 output_dimensionality=3072
             )
             
-            # Extracting correctly based on the 'requests[]' structure
+            # Extracting the embedding correctly from the list response
             if 'embedding' in response:
                 query_embedding = response['embedding'][0]
             else:
@@ -67,44 +67,62 @@ if prompt := st.chat_input("Ask about RBI Circulars..."):
                 st.stop()
 
         except Exception as e:
-            st.error(f"Embedding Error: {e}")
+            st.error(f"Embedding Generation Failed: {e}")
             st.stop()
 
-        # B. Search Supabase
-        try:
-            search_response = supabase.rpc("match_rbi_circulars", {
-                "query_embedding": query_embedding,
-                "match_threshold": 0.2,
-                "match_count": 5
-            }).execute()
-        except Exception as e:
-            st.error(f"Database Search Failed: {e}")
-            st.stop()
+        # B. Search Supabase (Vector Search)
+        matches = []
+        if query_embedding:
+            try:
+                # Calls the SQL function in your Supabase
+                search_response = supabase.rpc("match_rbi_circulars", {
+                    "query_embedding": query_embedding,
+                    "match_threshold": 0.2,
+                    "match_count": 5
+                }).execute()
+                matches = search_response.data
+            except Exception as e:
+                st.error(f"Database Search Failed: {e}")
+                st.stop()
         
         # C. Build Context
-        matches = search_response.data
         context_text = ""
         sources = []
         if matches:
-            for m in matches:
-                title = m.get('title', 'Unknown')
-                context_text += f"\n---\nTitle: {title}\nContent: {m.get('content')}\n"
-                sources.append(f"[{title}]({m.get('url')})")
+            for match in matches:
+                title = match.get('title', 'Unknown')
+                url = match.get('url', '#')
+                content = match.get('content', '')
+                context_text += f"\n---\nSource: {title}\nContent: {content}\n"
+                sources.append(f"[{title}]({url})")
         else:
-            context_text = "No relevant circulars found in the database."
+            context_text = "No relevant RBI circulars found in the database."
 
-        # D. Generate Answer
+        # D. Generate Answer with Gemini
         try:
             model = genai.GenerativeModel(chat_model_name)
-            ai_response = model.generate_content(
-                f"Answer the question based ONLY on this context.\n\nContext: {context_text}\n\nQuestion: {prompt}"
-            )
-            answer = ai_response.text
-            if sources:
-                answer += "\n\n**Sources:**\n" + "\n".join(list(set(sources)))
-        except Exception as e:
-            st.error(f"Gemini Error: {e}")
-            answer = "Error generating response."
+            
+            full_prompt = f"""
+            You are a specialized RBI Circular Assistant. 
+            Answer the user's question based ONLY on the following snippets from RBI circulars.
+            If the answer isn't in the context, say you don't have that information.
+            
+            USER QUESTION: {prompt}
 
-        st.markdown(answer)
-        st.session_state.messages.append({"role": "assistant", "content": answer})
+            RELEVANT CIRCULAR SNIPPETS:
+            {context_text}
+            """
+            
+            ai_response = model.generate_content(full_prompt)
+            answer = ai_response.text
+            
+            if sources:
+                # List unique sources
+                answer += "\n\n**Sources:**\n" + "\n".join(list(set(sources)))
+            
+        except Exception as e:
+            st.error(f"AI Generation Error: {e}")
+            answer = "Sorry, I encountered an error while analyzing the circulars."
+
+    st.markdown(answer)
+    st.session_state.messages.append({"role": "assistant", "content": answer})
