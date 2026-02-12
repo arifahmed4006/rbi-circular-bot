@@ -1,39 +1,30 @@
 import streamlit as st
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from supabase import create_client
 import os
 from dotenv import load_dotenv
 
-# 1. Load keys
+# ==============================
+# CONFIG
+# ==============================
+
 load_dotenv()
 
-# 2. Configure Gemini & Supabase
-try:
-    genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-    supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
-except Exception as e:
-    st.error(f"Configuration Error: {e}")
-    st.stop()
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# 3. Setup Title
+client = genai.Client(api_key=GOOGLE_API_KEY)
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 st.set_page_config(page_title="RBI Smart Assistant", layout="wide")
 st.title("🏦 RBI Circular Assistant")
 
-# --- AUTO-DETECT CHAT MODEL ---
-@st.cache_resource
-def get_chat_model_name():
-    try:
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        for preferred in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']:
-            if preferred in available_models:
-                return preferred
-        return "models/gemini-1.5-flash"
-    except:
-        return "models/gemini-1.5-flash"
+# ==============================
+# CHAT STATE
+# ==============================
 
-chat_model_name = get_chat_model_name()
-
-# 4. Chat Interface
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -41,86 +32,83 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
+# ==============================
+# USER INPUT
+# ==============================
+
 if prompt := st.chat_input("Ask about RBI Circulars..."):
+
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        # A. Get Embedding (Using the most direct method)
-        query_embedding = None
-        try:
-            # We use the explicit 'embed_content' call from the genai module directly
-            response = genai.embed_content(
-                model="models/gemini-embedding-001",
-                content=prompt, # Try passing it directly here
-                task_type="retrieval_query",
+
+        # --------------------------
+        # EMBED QUERY
+        # --------------------------
+        embed_response = client.models.embed_content(
+            model="gemini-embedding-001",
+            contents=[prompt],
+            config=types.EmbedContentConfig(
+                task_type="RETRIEVAL_QUERY",
                 output_dimensionality=3072
             )
-            
-            # The library sometimes returns 'embedding' as a list of lists 
-            # or a single list depending on the version. This logic handles both:
-            raw_embedding = response['embedding']
-            if isinstance(raw_embedding[0], list):
-                query_embedding = raw_embedding[0]
-            else:
-                query_embedding = raw_embedding
+        )
 
-        except Exception as e:
-            # SECOND ATTEMPT: If direct string fails, try forced list
-            try:
-                response = genai.embed_content(
-                    model="models/gemini-embedding-001",
-                    content=[prompt],
-                    task_type="retrieval_query",
-                    output_dimensionality=3072
-                )
-                query_embedding = response['embedding'][0]
-            except Exception as e2:
-                st.error(f"Embedding generation failed: {e2}")
-                st.stop()
+        query_embedding = embed_response.embeddings[0].values
 
-        # B. Search Supabase (Only if embedding succeeded)
-        if query_embedding:
-            try:
-                search_response = supabase.rpc("match_rbi_circulars", {
-                    "query_embedding": query_embedding,
-                    "match_threshold": 0.2,
-                    "match_count": 5
-                }).execute()
-                matches = search_response.data
-            except Exception as e:
-                st.error(f"Database Search Failed: {e}")
-                st.stop()
-        
-        # C. Build Context
+        # --------------------------
+        # VECTOR SEARCH
+        # --------------------------
+        search_response = supabase.rpc("match_rbi_circulars", {
+            "query_embedding": query_embedding,
+            "match_threshold": 0.65,
+            "match_count": 5
+        }).execute()
+
+        matches = search_response.data
+
+        # --------------------------
+        # BUILD CONTEXT
+        # --------------------------
         context_text = ""
         sources = []
+
         if matches:
             for m in matches:
-                title = m.get('title', 'Unknown Title')
-                url = m.get('url', '#')
-                content = m.get('content', '')
-                context_text += f"\n---\nSource: {title}\nContent: {content}\n"
-                sources.append(f"[{title}]({url})")
-        else:
-            context_text = "No relevant RBI circulars found in the database."
+                context_text += f"""
+--------------------------------
+Title: {m['title']}
+Date: {m['published_date']}
+Content:
+{m['content']}
+"""
+                sources.append(f"[{m['title']}]({m['url']})")
 
-        # D. Generate Answer with Gemini
-        try:
-            model = genai.GenerativeModel(chat_model_name)
-            ai_response = model.generate_content(
-                f"Answer the question based ONLY on this context.\n\nContext: {context_text}\n\nQuestion: {prompt}"
-            )
-            st.markdown(ai_response.text)
-            if sources:
-                st.markdown("**Sources:**\n" + "\n".join(list(set(sources))))
-            
-            st.session_state.messages.append({"role": "assistant", "content": ai_response.text})
-        except Exception as e:
-            st.error(f"AI Generation Error: {e}")
-            answer = "Sorry, I encountered an error while analyzing the circulars."
+        system_prompt = """
+You are an RBI regulatory assistant.
 
-    st.markdown(answer)
-    st.session_state.messages.append({"role": "assistant", "content": answer})
+Rules:
+1. Answer ONLY using the provided RBI circular context.
+2. If information is not present, say:
+   "This information is not available in the RBI circular database."
+3. Do NOT hallucinate regulatory details.
+4. Cite circular titles clearly.
+"""
 
+        model = genai.GenerativeModel("gemini-1.5-flash")
+
+        response = model.generate_content(
+            f"{system_prompt}\n\nContext:\n{context_text}\n\nQuestion:\n{prompt}"
+        )
+
+        st.markdown(response.text)
+
+        if sources:
+            st.markdown("### Sources")
+            for s in list(set(sources)):
+                st.markdown(f"- {s}")
+
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": response.text
+        })
