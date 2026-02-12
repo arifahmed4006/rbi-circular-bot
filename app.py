@@ -18,7 +18,6 @@ except Exception as e:
 # 3. Setup Title
 st.set_page_config(page_title="RBI Smart Assistant", layout="wide")
 st.title("🏦 RBI Circular Assistant")
-st.markdown("Querying RBI Circulars from 2025-2026 using Gemini & Supabase Vector Search.")
 
 # --- AUTO-DETECT CHAT MODEL ---
 @st.cache_resource
@@ -42,39 +41,39 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-if prompt := st.chat_input("Ask about 2026 RBI Circulars..."):
+if prompt := st.chat_input("Ask about RBI Circulars..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        # A. Get Embedding (FIXED FOR BATCH/LIST ERRORS)
+        # A. Get Embedding (FIXED FOR LIST ERROR)
         query_embedding = None
         try:
             # Wrap prompt in [] to satisfy the library requirement for a list
             response = genai.embed_content(
                 model="models/gemini-embedding-001",
-                content=[prompt],
+                content=[prompt], # MUST BE A LIST
                 task_type="retrieval_query",
                 output_dimensionality=3072
             )
             
-            # Extracting the embedding correctly from the list response
-            if 'embedding' in response:
-                query_embedding = response['embedding'][0]
+            # Use .get() to avoid crashing if the key is missing
+            embeddings_list = response.get('embedding')
+            if embeddings_list and len(embeddings_list) > 0:
+                query_embedding = embeddings_list[0]
             else:
-                st.error("Embedding key not found in response.")
+                st.error("The AI model returned an empty response. Please try again.")
                 st.stop()
 
         except Exception as e:
             st.error(f"Embedding Generation Failed: {e}")
             st.stop()
 
-        # B. Search Supabase (Vector Search)
+        # B. Search Supabase (Only if embedding succeeded)
         matches = []
         if query_embedding:
             try:
-                # Calls the SQL function in your Supabase
                 search_response = supabase.rpc("match_rbi_circulars", {
                     "query_embedding": query_embedding,
                     "match_threshold": 0.2,
@@ -89,10 +88,10 @@ if prompt := st.chat_input("Ask about 2026 RBI Circulars..."):
         context_text = ""
         sources = []
         if matches:
-            for match in matches:
-                title = match.get('title', 'Unknown')
-                url = match.get('url', '#')
-                content = match.get('content', '')
+            for m in matches:
+                title = m.get('title', 'Unknown Title')
+                url = m.get('url', '#')
+                content = m.get('content', '')
                 context_text += f"\n---\nSource: {title}\nContent: {content}\n"
                 sources.append(f"[{title}]({url})")
         else:
@@ -117,7 +116,6 @@ if prompt := st.chat_input("Ask about 2026 RBI Circulars..."):
             answer = ai_response.text
             
             if sources:
-                # List unique sources
                 answer += "\n\n**Sources:**\n" + "\n".join(list(set(sources)))
             
         except Exception as e:
