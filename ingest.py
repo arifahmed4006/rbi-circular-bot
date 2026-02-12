@@ -33,7 +33,7 @@ def get_embeddings_batch(text_chunks):
             contents=text_chunks,
             config=types.EmbedContentConfig(
                 task_type="RETRIEVAL_DOCUMENT",
-                output_dimensionality=3072
+                output_dimensionality=1536
             )
         )
         return [e.values for e in result.embeddings]
@@ -172,3 +172,4 @@ def run_scraper():
 
 if __name__ == "__main__":
     run_scraper()
+
