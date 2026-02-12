@@ -47,52 +47,63 @@ if prompt := st.chat_input("Ask about RBI Circulars..."):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        # A. Get Embedding (FIXED FOR LIST ERROR)
+        # A. Get Embedding (FIXED FOR BATCH/LIST ERRORS)
+        query_embedding = []
         try:
-            embedding_response = genai.embed_content(
-                model="models/gemini-embedding-001", 
-                content=[prompt], # Wrapped in list to avoid 'requests[]' error
+            # We use embed_content with a list [prompt]
+            # This version avoids the 'requests[]' and 'null to object' errors
+            response = genai.embed_content(
+                model="models/gemini-embedding-001",
+                content=[prompt],
                 task_type="retrieval_query",
                 output_dimensionality=3072
             )
-            query_embedding = embedding_response['embedding'][0]
+            
+            # Extracting correctly based on the 'requests[]' structure
+            if 'embedding' in response:
+                query_embedding = response['embedding'][0]
+            else:
+                st.error("Embedding key not found in response.")
+                st.stop()
+
         except Exception as e:
             st.error(f"Embedding Error: {e}")
             st.stop()
 
         # B. Search Supabase
         try:
-            response = supabase.rpc("match_rbi_circulars", {
+            search_response = supabase.rpc("match_rbi_circulars", {
                 "query_embedding": query_embedding,
                 "match_threshold": 0.2,
                 "match_count": 5
             }).execute()
         except Exception as e:
-            st.error(f"Database Error: {e}")
+            st.error(f"Database Search Failed: {e}")
             st.stop()
         
         # C. Build Context
-        matches = response.data
+        matches = search_response.data
         context_text = ""
         sources = []
         if matches:
             for m in matches:
-                context_text += f"\n---\nTitle: {m.get('title')}\nContent: {m.get('content')}\n"
-                sources.append(f"[{m.get('title')}]({m.get('url')})")
+                title = m.get('title', 'Unknown')
+                context_text += f"\n---\nTitle: {title}\nContent: {m.get('content')}\n"
+                sources.append(f"[{title}]({m.get('url')})")
         else:
-            context_text = "No relevant circulars found."
+            context_text = "No relevant circulars found in the database."
 
         # D. Generate Answer
         try:
             model = genai.GenerativeModel(chat_model_name)
             ai_response = model.generate_content(
-                f"Answer the question using the context below only.\n\nContext: {context_text}\n\nQuestion: {prompt}"
+                f"Answer the question based ONLY on this context.\n\nContext: {context_text}\n\nQuestion: {prompt}"
             )
             answer = ai_response.text
             if sources:
                 answer += "\n\n**Sources:**\n" + "\n".join(list(set(sources)))
         except Exception as e:
-            st.error(f"AI Error: {e}")
+            st.error(f"Gemini Error: {e}")
             answer = "Error generating response."
 
         st.markdown(answer)
