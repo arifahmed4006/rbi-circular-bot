@@ -18,7 +18,6 @@ except Exception as e:
 # 3. Setup Title
 st.set_page_config(page_title="RBI Smart Assistant", layout="wide")
 st.title("🏦 RBI Circular Assistant")
-st.markdown("Querying RBI Circulars from 2025-2026 using Gemini & Supabase Vector Search.")
 
 # --- AUTO-DETECT CHAT MODEL ---
 @st.cache_resource
@@ -42,75 +41,59 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-if prompt := st.chat_input("Ask about 2026 RBI Circulars..."):
+if prompt := st.chat_input("Ask about RBI Circulars..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        # A. Get Embedding for the query (MUST MATCH INGEST DIMENSIONS: 3072)
+        # A. Get Embedding (FIXED FOR LIST ERROR)
         try:
             embedding_response = genai.embed_content(
                 model="models/gemini-embedding-001", 
-                content=prompt,
+                content=[prompt], # Wrapped in list to avoid 'requests[]' error
                 task_type="retrieval_query",
                 output_dimensionality=3072
             )
-            query_embedding = embedding_response['embedding']
+            query_embedding = embedding_response['embedding'][0]
         except Exception as e:
             st.error(f"Embedding Error: {e}")
             st.stop()
 
-        # B. Search Supabase (Vector Search)
+        # B. Search Supabase
         try:
-            # This calls the SQL function you created in Supabase
             response = supabase.rpc("match_rbi_circulars", {
                 "query_embedding": query_embedding,
-                "match_threshold": 0.2, # Adjusted for better recall
+                "match_threshold": 0.2,
                 "match_count": 5
             }).execute()
         except Exception as e:
             st.error(f"Database Error: {e}")
             st.stop()
         
-        # C. Build Context from Database Matches
+        # C. Build Context
         matches = response.data
         context_text = ""
         sources = []
         if matches:
-            for match in matches:
-                title = match.get('title', 'Unknown Title')
-                url = match.get('url', '#')
-                content = match.get('content', '')
-                context_text += f"\n---\nSource: {title}\nContent: {content}\n"
-                sources.append(f"[{title}]({url})")
+            for m in matches:
+                context_text += f"\n---\nTitle: {m.get('title')}\nContent: {m.get('content')}\n"
+                sources.append(f"[{m.get('title')}]({m.get('url')})")
         else:
-            context_text = "No relevant RBI circulars found in the database."
+            context_text = "No relevant circulars found."
 
-        # D. Generate Final Answer with Gemini
+        # D. Generate Answer
         try:
             model = genai.GenerativeModel(chat_model_name)
-            
-            full_prompt = f"""
-            You are a specialized RBI Circular Assistant. 
-            Answer the user's question based ONLY on the following snippets from RBI circulars.
-            If the answer isn't in the context, say you don't have that information.
-            
-            USER QUESTION: {prompt}
-
-            RELEVANT CIRCULAR SNIPPETS:
-            {context_text}
-            """
-            
-            ai_response = model.generate_content(full_prompt)
+            ai_response = model.generate_content(
+                f"Answer the question using the context below only.\n\nContext: {context_text}\n\nQuestion: {prompt}"
+            )
             answer = ai_response.text
-            
             if sources:
                 answer += "\n\n**Sources:**\n" + "\n".join(list(set(sources)))
-            
         except Exception as e:
-            st.error(f"AI Generation Error: {e}")
-            answer = "Sorry, I encountered an error while analyzing the circulars."
+            st.error(f"AI Error: {e}")
+            answer = "Error generating response."
 
         st.markdown(answer)
         st.session_state.messages.append({"role": "assistant", "content": answer})
