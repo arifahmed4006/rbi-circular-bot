@@ -47,31 +47,40 @@ if prompt := st.chat_input("Ask about RBI Circulars..."):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        # A. Get Embedding (FIXED FOR LIST ERROR)
+        # A. Get Embedding (Using the most direct method)
         query_embedding = None
         try:
-            # Wrap prompt in [] to satisfy the library requirement for a list
+            # We use the explicit 'embed_content' call from the genai module directly
             response = genai.embed_content(
                 model="models/gemini-embedding-001",
-                content=[prompt], # MUST BE A LIST
+                content=prompt, # Try passing it directly here
                 task_type="retrieval_query",
                 output_dimensionality=3072
             )
             
-            # Use .get() to avoid crashing if the key is missing
-            embeddings_list = response.get('embedding')
-            if embeddings_list and len(embeddings_list) > 0:
-                query_embedding = embeddings_list[0]
+            # The library sometimes returns 'embedding' as a list of lists 
+            # or a single list depending on the version. This logic handles both:
+            raw_embedding = response['embedding']
+            if isinstance(raw_embedding[0], list):
+                query_embedding = raw_embedding[0]
             else:
-                st.error("The AI model returned an empty response. Please try again.")
-                st.stop()
+                query_embedding = raw_embedding
 
         except Exception as e:
-            st.error(f"Embedding Generation Failed: {e}")
-            st.stop()
+            # SECOND ATTEMPT: If direct string fails, try forced list
+            try:
+                response = genai.embed_content(
+                    model="models/gemini-embedding-001",
+                    content=[prompt],
+                    task_type="retrieval_query",
+                    output_dimensionality=3072
+                )
+                query_embedding = response['embedding'][0]
+            except Exception as e2:
+                st.error(f"Embedding generation failed: {e2}")
+                st.stop()
 
         # B. Search Supabase (Only if embedding succeeded)
-        matches = []
         if query_embedding:
             try:
                 search_response = supabase.rpc("match_rbi_circulars", {
@@ -100,27 +109,18 @@ if prompt := st.chat_input("Ask about RBI Circulars..."):
         # D. Generate Answer with Gemini
         try:
             model = genai.GenerativeModel(chat_model_name)
-            
-            full_prompt = f"""
-            You are a specialized RBI Circular Assistant. 
-            Answer the user's question based ONLY on the following snippets from RBI circulars.
-            If the answer isn't in the context, say you don't have that information.
-            
-            USER QUESTION: {prompt}
-
-            RELEVANT CIRCULAR SNIPPETS:
-            {context_text}
-            """
-            
-            ai_response = model.generate_content(full_prompt)
-            answer = ai_response.text
-            
+            ai_response = model.generate_content(
+                f"Answer the question based ONLY on this context.\n\nContext: {context_text}\n\nQuestion: {prompt}"
+            )
+            st.markdown(ai_response.text)
             if sources:
-                answer += "\n\n**Sources:**\n" + "\n".join(list(set(sources)))
+                st.markdown("**Sources:**\n" + "\n".join(list(set(sources))))
             
+            st.session_state.messages.append({"role": "assistant", "content": ai_response.text})
         except Exception as e:
             st.error(f"AI Generation Error: {e}")
             answer = "Sorry, I encountered an error while analyzing the circulars."
 
     st.markdown(answer)
     st.session_state.messages.append({"role": "assistant", "content": answer})
+
