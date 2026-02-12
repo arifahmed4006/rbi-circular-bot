@@ -50,7 +50,7 @@ if prompt := st.chat_input("Ask about RBI Circulars..."):
             contents=[prompt],
             config=types.EmbedContentConfig(
                 task_type="RETRIEVAL_QUERY",
-                output_dimensionality=3072
+                output_dimensionality=1536
             )
         )
 
@@ -112,3 +112,4 @@ Rules:
             "role": "assistant",
             "content": response.text
         })
+
